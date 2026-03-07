@@ -1,6 +1,122 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+struct ContactsCache {
+    phone_to_name: HashMap<String, String>,
+    loaded_at: Option<Instant>,
+}
+
+static CACHE: OnceLock<Mutex<ContactsCache>> = OnceLock::new();
+
+fn get_cache() -> &'static Mutex<ContactsCache> {
+    CACHE.get_or_init(|| {
+        Mutex::new(ContactsCache {
+            phone_to_name: HashMap::new(),
+            loaded_at: None,
+        })
+    })
+}
+
+/// Normalize a phone number by stripping spaces, dashes, parens
+fn normalize_phone(phone: &str) -> String {
+    phone.chars().filter(|c| c.is_ascii_digit() || *c == '+').collect()
+}
+
+/// Load all contacts into cache (refreshes every 5 minutes).
+/// Uses a timeout to avoid blocking if Contacts.app needs permission.
+fn ensure_cache() {
+    let cache = get_cache();
+    {
+        let c = cache.lock().unwrap();
+        if let Some(loaded_at) = c.loaded_at {
+            if loaded_at.elapsed() < Duration::from_secs(300) {
+                return;
+            }
+        }
+    }
+
+    let script = r#"tell application "Contacts"
+    set output to ""
+    repeat with p in every person
+        set pName to name of p
+        repeat with ph in phones of p
+            set output to output & value of ph & "=" & pName & linefeed
+        end repeat
+    end repeat
+    return output
+end tell"#;
+
+    let child = Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+
+    let Ok(child) = child else { return };
+
+    // Wait with a 5-second timeout to avoid blocking
+    let result = wait_with_timeout(child, Duration::from_secs(5));
+
+    if let Some(output) = result {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let mut c = cache.lock().unwrap();
+            c.phone_to_name.clear();
+            for line in stdout.lines() {
+                if let Some((phone, name)) = line.split_once('=') {
+                    let normalized = normalize_phone(phone.trim());
+                    if !normalized.is_empty() && !name.trim().is_empty() {
+                        c.phone_to_name.insert(normalized, name.trim().to_string());
+                    }
+                }
+            }
+            c.loaded_at = Some(Instant::now());
+        }
+    }
+}
+
+fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> Option<std::process::Output> {
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = child.stdout.take().map(|mut s| {
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                    buf
+                }).unwrap_or_default();
+                let stderr = child.stderr.take().map(|mut s| {
+                    let mut buf = Vec::new();
+                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                    buf
+                }).unwrap_or_default();
+                return Some(std::process::Output { status, stdout, stderr });
+            }
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Look up a contact name by phone number. Returns None if not found or cache unavailable.
+pub fn resolve_name(phone: &str) -> Option<String> {
+    ensure_cache();
+    let cache = get_cache();
+    let c = cache.lock().unwrap();
+    let normalized = normalize_phone(phone);
+    c.phone_to_name.get(&normalized).cloned()
+}
 
 /// Parse the structured output from our AppleScript contact queries.
 /// Format per contact: "NAME|PHONES|EMAILS" where PHONES and EMAILS are comma-separated

@@ -15,8 +15,10 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct MessagesFetchParams {
-    #[schemars(description = "Phone numbers in E.164 format (e.g. +16317457857) to filter by")]
-    participants: Vec<String>,
+    #[schemars(description = "Phone numbers in E.164 format (e.g. +16317457857) to filter by. For group chats, leave empty and use chat_identifier instead.")]
+    participants: Option<Vec<String>>,
+    #[schemars(description = "Chat identifier for group chats (e.g. chat696614010123836136). Get this from messages_threads. Use this OR participants, not both.")]
+    chat_identifier: Option<String>,
     #[schemars(description = "Max number of messages to return (default 50, max 200)")]
     limit: Option<u32>,
     #[schemars(description = "Pagination cursor: only return messages before this unix timestamp (use next_cursor from previous response)")]
@@ -27,8 +29,10 @@ struct MessagesFetchParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct MessagesSendParams {
-    #[schemars(description = "Recipient phone number (E.164) or Apple ID email")]
-    recipient: String,
+    #[schemars(description = "Recipient phone number (E.164) or Apple ID email. For group chats, leave empty and use chat_identifier.")]
+    recipient: Option<String>,
+    #[schemars(description = "Chat identifier for group chats (from messages_threads). Use this OR recipient, not both.")]
+    chat_identifier: Option<String>,
     #[schemars(description = "Message text to send")]
     text: String,
 }
@@ -75,23 +79,24 @@ impl IMessageServer {
         &self,
         Parameters(MessagesFetchParams {
             participants,
+            chat_identifier,
             limit,
             before_timestamp,
             after_timestamp,
         }): Parameters<MessagesFetchParams>,
     ) -> String {
-        match messages::fetch(participants, limit, before_timestamp, after_timestamp) {
+        match messages::fetch(participants.unwrap_or_default(), chat_identifier, limit, before_timestamp, after_timestamp) {
             Ok(v) => v.to_string(),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
 
-    #[tool(description = "Send an iMessage or SMS to a phone number (E.164 format like +16317457857) or Apple ID email. Messages.app must be running.")]
+    #[tool(description = "Send an iMessage or SMS. For 1-on-1: provide recipient (phone E.164 or email). For group chats: provide chat_identifier from messages_threads. Messages.app must be running.")]
     fn messages_send(
         &self,
-        Parameters(MessagesSendParams { recipient, text }): Parameters<MessagesSendParams>,
+        Parameters(MessagesSendParams { recipient, chat_identifier, text }): Parameters<MessagesSendParams>,
     ) -> String {
-        match send::send_message(&recipient, &text) {
+        match send::send_message(recipient.as_deref(), chat_identifier.as_deref(), &text) {
             Ok(v) => v.to_string(),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }

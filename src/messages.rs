@@ -1,3 +1,4 @@
+use crate::contacts;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 use serde_json::{json, Value};
@@ -100,23 +101,30 @@ fn row_to_message(
     chat_id: String,
 ) -> Value {
     let unix_ts = apple_ts_to_unix(date_apple);
-    let sender = if is_from_me {
-        "me".to_string()
+    let (sender, sender_name) = if is_from_me {
+        ("me".to_string(), None)
     } else {
-        handle_id.unwrap_or_else(|| "unknown".to_string())
+        let handle = handle_id.unwrap_or_else(|| "unknown".to_string());
+        let name = contacts::resolve_name(&handle);
+        (handle, name)
     };
-    json!({
+    let mut msg = json!({
         "id": rowid,
         "text": text,
         "timestamp": unix_ts,
         "is_from_me": is_from_me,
         "sender": sender,
         "chat_identifier": chat_id
-    })
+    });
+    if let Some(name) = sender_name {
+        msg["sender_name"] = json!(name);
+    }
+    msg
 }
 
 pub fn fetch(
     participants: Vec<String>,
+    chat_identifier: Option<String>,
     limit: Option<u32>,
     before_timestamp: Option<i64>,
     after_timestamp: Option<i64>,
@@ -124,11 +132,16 @@ pub fn fetch(
     let conn = open_db()?;
     let limit = limit.unwrap_or(50).min(200);
 
-    if participants.is_empty() {
-        return Err(anyhow::anyhow!("At least one participant phone number is required"));
-    }
+    // Build the chat filter: either by chat_identifier directly, or by participant phone numbers
+    let identifiers: Vec<String> = if let Some(ref cid) = chat_identifier {
+        vec![cid.clone()]
+    } else if !participants.is_empty() {
+        participants.clone()
+    } else {
+        return Err(anyhow::anyhow!("Provide either participants or chat_identifier"));
+    };
 
-    let placeholders: String = participants.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let placeholders: String = identifiers.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
 
     let sql = format!(
         "SELECT
@@ -158,7 +171,7 @@ pub fn fetch(
     let after_apple = after_timestamp.map(unix_to_apple).unwrap_or(0);
     let has_after: i64 = if after_timestamp.is_some() { 1 } else { 0 };
 
-    let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = participants
+    let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = identifiers
         .iter()
         .map(|p| Box::new(p.clone()) as Box<dyn rusqlite::ToSql>)
         .collect();
@@ -203,35 +216,34 @@ pub fn search(
     before_timestamp: Option<i64>,
 ) -> Result<Value> {
     let conn = open_db()?;
-    let limit = limit.unwrap_or(50).min(200);
+    let limit = limit.unwrap_or(50).min(200) as usize;
+    let query_lower = query.to_lowercase();
     let pattern = format!("%{}%", query);
 
     let before_apple = before_timestamp.map(unix_to_apple).unwrap_or(0);
     let has_before: i64 = if before_timestamp.is_some() { 1 } else { 0 };
 
-    // Search both text and attributedBody (cast to text for LIKE)
-    // For attributedBody, we do a hex cast and search - not ideal but works
-    // Better approach: search text column, then post-filter attributedBody results
-    // We'll over-fetch and filter in Rust for attributedBody messages
-    let sql = "SELECT
-        m.rowid,
-        m.text,
-        m.attributedBody,
-        m.date,
-        m.is_from_me,
-        h.id as handle_id,
-        c.chat_identifier
+    // Two-pass search:
+    // 1. SQL LIKE on text column (fast, indexed)
+    // 2. Scan attributedBody messages and filter in Rust (since CAST doesn't work on blobs)
+    // Over-fetch from SQL, then take `limit` results total
+
+    // Pass 1: text column matches
+    let sql_text = "SELECT
+        m.rowid, m.text, m.attributedBody, m.date, m.is_from_me,
+        h.id as handle_id, c.chat_identifier
     FROM message m
     LEFT JOIN handle h ON m.handle_id = h.rowid
     JOIN chat_message_join cmj ON cmj.message_id = m.rowid
     JOIN chat c ON c.rowid = cmj.chat_id
-    WHERE (m.text LIKE ?1 OR (m.text IS NULL AND m.attributedBody IS NOT NULL AND CAST(m.attributedBody AS TEXT) LIKE ?1))
+    WHERE m.text LIKE ?1
+      AND m.text IS NOT NULL AND m.text != ''
       AND (?2 = 0 OR m.date < ?3)
     ORDER BY m.date DESC
     LIMIT ?4";
 
-    let mut stmt = conn.prepare(sql)?;
-    let messages: Vec<Value> = stmt
+    let mut stmt = conn.prepare(sql_text)?;
+    let mut messages: Vec<Value> = stmt
         .query_map(params![pattern, has_before, before_apple, limit as i64], |row| {
             let rowid: i64 = row.get(0)?;
             let text: Option<String> = row.get(1)?;
@@ -245,13 +257,60 @@ pub fn search(
         .filter_map(|r| r.ok())
         .filter_map(|(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
             let resolved = resolve_text(text, attributed_body)?;
-            // Double-check the resolved text actually contains the query (for attributedBody matches)
-            if !resolved.to_lowercase().contains(&query.to_lowercase()) {
-                return None;
-            }
             Some(row_to_message(rowid, resolved, date_apple, is_from_me, handle_id, chat_id))
         })
         .collect();
+
+    // Pass 2: attributedBody messages (text IS NULL) - scan and filter in Rust
+    // Over-fetch 5x to account for filtering
+    let remaining = limit.saturating_sub(messages.len());
+    if remaining > 0 {
+        let overfetch = ((remaining * 50) as i64).max(500);
+        let sql_body = "SELECT
+            m.rowid, m.text, m.attributedBody, m.date, m.is_from_me,
+            h.id as handle_id, c.chat_identifier
+        FROM message m
+        LEFT JOIN handle h ON m.handle_id = h.rowid
+        JOIN chat_message_join cmj ON cmj.message_id = m.rowid
+        JOIN chat c ON c.rowid = cmj.chat_id
+        WHERE m.text IS NULL AND m.attributedBody IS NOT NULL
+          AND (?1 = 0 OR m.date < ?2)
+        ORDER BY m.date DESC
+        LIMIT ?3";
+
+        let mut stmt2 = conn.prepare(sql_body)?;
+        let body_matches: Vec<Value> = stmt2
+            .query_map(params![has_before, before_apple, overfetch], |row| {
+                let rowid: i64 = row.get(0)?;
+                let text: Option<String> = row.get(1)?;
+                let attributed_body: Option<Vec<u8>> = row.get(2)?;
+                let date_apple: i64 = row.get(3)?;
+                let is_from_me: bool = row.get(4)?;
+                let handle_id: Option<String> = row.get(5)?;
+                let chat_id: String = row.get(6)?;
+                Ok((rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(|(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
+                let resolved = resolve_text(text, attributed_body)?;
+                if !resolved.to_lowercase().contains(&query_lower) {
+                    return None;
+                }
+                Some(row_to_message(rowid, resolved, date_apple, is_from_me, handle_id, chat_id))
+            })
+            .take(remaining)
+            .collect();
+
+        messages.extend(body_matches);
+    }
+
+    // Sort merged results by timestamp descending
+    messages.sort_by(|a, b| {
+        let ta = a["timestamp"].as_i64().unwrap_or(0);
+        let tb = b["timestamp"].as_i64().unwrap_or(0);
+        tb.cmp(&ta)
+    });
+    messages.truncate(limit);
 
     let next_cursor = messages.last().map(|m| m["timestamp"].as_i64().unwrap_or(0));
 
@@ -319,14 +378,28 @@ pub fn threads(limit: Option<u32>, offset: Option<u32>) -> Result<Value> {
                 .split(',')
                 .filter(|s| !s.is_empty())
                 .collect();
+            // Resolve contact names for participants
+            let participant_names: Vec<Value> = participant_list
+                .iter()
+                .map(|p| {
+                    let name = contacts::resolve_name(p);
+                    json!({ "handle": p, "name": name })
+                })
+                .collect();
+            // For 1-on-1 chats without a display_name, try to resolve the contact name
+            let resolved_name = if display_name.as_ref().map_or(true, |n| n.is_empty()) && participant_list.len() == 1 {
+                contacts::resolve_name(participant_list[0])
+            } else {
+                display_name.clone()
+            };
             json!({
                 "chat_id": chat_id,
                 "chat_identifier": chat_identifier,
-                "display_name": display_name,
+                "display_name": resolved_name,
                 "last_message": last_message,
                 "last_timestamp": unix_ts,
                 "last_is_from_me": is_from_me,
-                "participants": participant_list
+                "participants": participant_names
             })
         })
         .collect();
