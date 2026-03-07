@@ -3,11 +3,14 @@ use rusqlite::{Connection, params};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-/// Apple epoch offset: seconds from Unix epoch (1970-01-01) to Apple epoch (2001-01-01)
 const APPLE_EPOCH_OFFSET: i64 = 978307200;
 
 fn apple_ts_to_unix(ts: i64) -> i64 {
     ts / 1_000_000_000 + APPLE_EPOCH_OFFSET
+}
+
+fn unix_to_apple(ts: i64) -> i64 {
+    (ts - APPLE_EPOCH_OFFSET) * 1_000_000_000
 }
 
 fn db_path() -> PathBuf {
@@ -17,11 +20,107 @@ fn db_path() -> PathBuf {
 
 fn open_db() -> Result<Connection> {
     let path = db_path();
-    Connection::open(&path).with_context(|| format!("Failed to open chat.db at {:?}", path))
+    let conn = Connection::open(&path)
+        .with_context(|| format!("Failed to open chat.db at {:?}", path))?;
+    conn.pragma_update(None, "query_only", "ON")?;
+    Ok(conn)
 }
 
-/// Fetch messages filtered by participant phone numbers, with optional limit
-pub fn fetch(participants: Vec<String>, limit: Option<u32>, after_date: Option<i64>) -> Result<Value> {
+/// Extract plain text from NSAttributedString binary blob (attributedBody column).
+/// Format: ... NSString \x01\x94\x84\x01 + <length> <text> ...
+/// Length is single byte if < 0x80, otherwise multi-byte (low nibble = number of length bytes, little-endian).
+fn extract_text_from_attributed_body(data: &[u8]) -> Option<String> {
+    let marker = b"NSString";
+    let idx = data.windows(marker.len()).position(|w| w == marker)?;
+    let after = &data[idx + marker.len()..];
+
+    // Find the '+' (0x2b) byte that precedes the length
+    let plus_idx = after.iter().position(|&b| b == 0x2b)?;
+    let after_plus = &after[plus_idx + 1..];
+    if after_plus.is_empty() {
+        return None;
+    }
+
+    let length_byte = after_plus[0];
+    let (length, text_start): (usize, usize);
+
+    if length_byte < 0x80 {
+        length = length_byte as usize;
+        text_start = 1;
+    } else {
+        // Multi-byte length: low nibble = number of bytes for length, little-endian
+        let num_bytes = (length_byte & 0x0f) as usize;
+        if after_plus.len() < 1 + num_bytes {
+            return None;
+        }
+        let mut len_val: usize = 0;
+        for i in 0..num_bytes {
+            len_val |= (after_plus[1 + i] as usize) << (8 * i);
+        }
+        length = len_val;
+        text_start = 1 + num_bytes;
+    }
+
+    if after_plus.len() < text_start + length {
+        return None;
+    }
+
+    let text_bytes = &after_plus[text_start..text_start + length];
+    let text = String::from_utf8_lossy(text_bytes).to_string();
+
+    // Trim leading control characters (sometimes has \r, \x03, \x0c prefix)
+    let trimmed = text.trim_start_matches(|c: char| c.is_control()).to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+fn resolve_text(text: Option<String>, attributed_body: Option<Vec<u8>>) -> Option<String> {
+    // Prefer text column if it's non-empty
+    if let Some(ref t) = text {
+        if !t.is_empty() {
+            return Some(t.clone());
+        }
+    }
+    // Fall back to extracting from attributedBody
+    if let Some(ref body) = attributed_body {
+        return extract_text_from_attributed_body(body);
+    }
+    None
+}
+
+fn row_to_message(
+    rowid: i64,
+    text: String,
+    date_apple: i64,
+    is_from_me: bool,
+    handle_id: Option<String>,
+    chat_id: String,
+) -> Value {
+    let unix_ts = apple_ts_to_unix(date_apple);
+    let sender = if is_from_me {
+        "me".to_string()
+    } else {
+        handle_id.unwrap_or_else(|| "unknown".to_string())
+    };
+    json!({
+        "id": rowid,
+        "text": text,
+        "timestamp": unix_ts,
+        "is_from_me": is_from_me,
+        "sender": sender,
+        "chat_identifier": chat_id
+    })
+}
+
+pub fn fetch(
+    participants: Vec<String>,
+    limit: Option<u32>,
+    before_timestamp: Option<i64>,
+    after_timestamp: Option<i64>,
+) -> Result<Value> {
     let conn = open_db()?;
     let limit = limit.unwrap_or(50).min(200);
 
@@ -29,45 +128,43 @@ pub fn fetch(participants: Vec<String>, limit: Option<u32>, after_date: Option<i
         return Err(anyhow::anyhow!("At least one participant phone number is required"));
     }
 
-    // Build placeholders for IN clause
     let placeholders: String = participants.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
 
     let sql = format!(
-        "SELECT DISTINCT
+        "SELECT
             m.rowid,
             m.text,
+            m.attributedBody,
             m.date,
             m.is_from_me,
-            COALESCE(h.id, 'me') as sender_handle,
+            h.id as handle_id,
             c.chat_identifier
         FROM message m
         LEFT JOIN handle h ON m.handle_id = h.rowid
         JOIN chat_message_join cmj ON cmj.message_id = m.rowid
         JOIN chat c ON c.rowid = cmj.chat_id
-        JOIN chat_handle_join chj ON chj.chat_id = c.rowid
-        JOIN handle h2 ON h2.rowid = chj.handle_id
-        WHERE h2.id IN ({placeholders})
-          AND m.text IS NOT NULL
-          AND m.text != ''
+        WHERE c.chat_identifier IN ({placeholders})
+          AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
+          AND (? = 0 OR m.date < ?)
           AND (? = 0 OR m.date > ?)
         ORDER BY m.date DESC
-        LIMIT ?",
-        placeholders = placeholders
+        LIMIT ?"
     );
 
     let mut stmt = conn.prepare(&sql)?;
 
-    // Build params: participant list + after_date placeholder x2 + limit
-    let after_apple = after_date
-        .map(|unix| (unix - APPLE_EPOCH_OFFSET) * 1_000_000_000)
-        .unwrap_or(0);
-    let has_date_filter: i64 = if after_date.is_some() { 1 } else { 0 };
+    let before_apple = before_timestamp.map(unix_to_apple).unwrap_or(0);
+    let has_before: i64 = if before_timestamp.is_some() { 1 } else { 0 };
+    let after_apple = after_timestamp.map(unix_to_apple).unwrap_or(0);
+    let has_after: i64 = if after_timestamp.is_some() { 1 } else { 0 };
 
     let mut param_values: Vec<Box<dyn rusqlite::ToSql>> = participants
         .iter()
         .map(|p| Box::new(p.clone()) as Box<dyn rusqlite::ToSql>)
         .collect();
-    param_values.push(Box::new(has_date_filter));
+    param_values.push(Box::new(has_before));
+    param_values.push(Box::new(before_apple));
+    param_values.push(Box::new(has_after));
     param_values.push(Box::new(after_apple));
     param_values.push(Box::new(limit as i64));
 
@@ -76,91 +173,107 @@ pub fn fetch(participants: Vec<String>, limit: Option<u32>, after_date: Option<i
     let messages: Vec<Value> = stmt
         .query_map(param_refs.as_slice(), |row| {
             let rowid: i64 = row.get(0)?;
-            let text: String = row.get(1)?;
-            let date_apple: i64 = row.get(2)?;
-            let is_from_me: bool = row.get(3)?;
-            let sender: String = row.get(4)?;
-            let chat_id: String = row.get(5)?;
-            Ok((rowid, text, date_apple, is_from_me, sender, chat_id))
+            let text: Option<String> = row.get(1)?;
+            let attributed_body: Option<Vec<u8>> = row.get(2)?;
+            let date_apple: i64 = row.get(3)?;
+            let is_from_me: bool = row.get(4)?;
+            let handle_id: Option<String> = row.get(5)?;
+            let chat_id: String = row.get(6)?;
+            Ok((rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id))
         })?
         .filter_map(|r| r.ok())
-        .map(|(rowid, text, date_apple, is_from_me, sender, chat_id)| {
-            let unix_ts = apple_ts_to_unix(date_apple);
-            json!({
-                "id": rowid,
-                "text": text,
-                "timestamp": unix_ts,
-                "is_from_me": is_from_me,
-                "sender": sender,
-                "chat_identifier": chat_id
-            })
+        .filter_map(|(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
+            let resolved = resolve_text(text, attributed_body)?;
+            Some(row_to_message(rowid, resolved, date_apple, is_from_me, handle_id, chat_id))
         })
         .collect();
 
-    Ok(json!({ "messages": messages, "count": messages.len() }))
+    let next_cursor = messages.last().map(|m| m["timestamp"].as_i64().unwrap_or(0));
+
+    Ok(json!({
+        "messages": messages,
+        "count": messages.len(),
+        "next_cursor": next_cursor
+    }))
 }
 
-/// Full-text search across all messages
-pub fn search(query: String, limit: Option<u32>) -> Result<Value> {
+pub fn search(
+    query: String,
+    limit: Option<u32>,
+    before_timestamp: Option<i64>,
+) -> Result<Value> {
     let conn = open_db()?;
     let limit = limit.unwrap_or(50).min(200);
     let pattern = format!("%{}%", query);
 
+    let before_apple = before_timestamp.map(unix_to_apple).unwrap_or(0);
+    let has_before: i64 = if before_timestamp.is_some() { 1 } else { 0 };
+
+    // Search both text and attributedBody (cast to text for LIKE)
+    // For attributedBody, we do a hex cast and search - not ideal but works
+    // Better approach: search text column, then post-filter attributedBody results
+    // We'll over-fetch and filter in Rust for attributedBody messages
     let sql = "SELECT
         m.rowid,
         m.text,
+        m.attributedBody,
         m.date,
         m.is_from_me,
-        COALESCE(h.id, 'me') as sender_handle,
+        h.id as handle_id,
         c.chat_identifier
     FROM message m
     LEFT JOIN handle h ON m.handle_id = h.rowid
     JOIN chat_message_join cmj ON cmj.message_id = m.rowid
     JOIN chat c ON c.rowid = cmj.chat_id
-    WHERE m.text LIKE ?
-      AND m.text IS NOT NULL
-      AND m.text != ''
+    WHERE (m.text LIKE ?1 OR (m.text IS NULL AND m.attributedBody IS NOT NULL AND CAST(m.attributedBody AS TEXT) LIKE ?1))
+      AND (?2 = 0 OR m.date < ?3)
     ORDER BY m.date DESC
-    LIMIT ?";
+    LIMIT ?4";
 
     let mut stmt = conn.prepare(sql)?;
     let messages: Vec<Value> = stmt
-        .query_map(params![pattern, limit as i64], |row| {
+        .query_map(params![pattern, has_before, before_apple, limit as i64], |row| {
             let rowid: i64 = row.get(0)?;
-            let text: String = row.get(1)?;
-            let date_apple: i64 = row.get(2)?;
-            let is_from_me: bool = row.get(3)?;
-            let sender: String = row.get(4)?;
-            let chat_id: String = row.get(5)?;
-            Ok((rowid, text, date_apple, is_from_me, sender, chat_id))
+            let text: Option<String> = row.get(1)?;
+            let attributed_body: Option<Vec<u8>> = row.get(2)?;
+            let date_apple: i64 = row.get(3)?;
+            let is_from_me: bool = row.get(4)?;
+            let handle_id: Option<String> = row.get(5)?;
+            let chat_id: String = row.get(6)?;
+            Ok((rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id))
         })?
         .filter_map(|r| r.ok())
-        .map(|(rowid, text, date_apple, is_from_me, sender, chat_id)| {
-            let unix_ts = apple_ts_to_unix(date_apple);
-            json!({
-                "id": rowid,
-                "text": text,
-                "timestamp": unix_ts,
-                "is_from_me": is_from_me,
-                "sender": sender,
-                "chat_identifier": chat_id
-            })
+        .filter_map(|(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
+            let resolved = resolve_text(text, attributed_body)?;
+            // Double-check the resolved text actually contains the query (for attributedBody matches)
+            if !resolved.to_lowercase().contains(&query.to_lowercase()) {
+                return None;
+            }
+            Some(row_to_message(rowid, resolved, date_apple, is_from_me, handle_id, chat_id))
         })
         .collect();
 
-    Ok(json!({ "messages": messages, "count": messages.len(), "query": query }))
+    let next_cursor = messages.last().map(|m| m["timestamp"].as_i64().unwrap_or(0));
+
+    Ok(json!({
+        "messages": messages,
+        "count": messages.len(),
+        "query": query,
+        "next_cursor": next_cursor
+    }))
 }
 
-/// List recent conversation threads
-pub fn threads(limit: Option<u32>) -> Result<Value> {
+pub fn threads(limit: Option<u32>, offset: Option<u32>) -> Result<Value> {
     let conn = open_db()?;
     let limit = limit.unwrap_or(20).min(100);
+    let offset = offset.unwrap_or(0);
 
     let sql = "SELECT
         c.rowid as chat_id,
         c.chat_identifier,
         c.display_name,
-        m.text as last_message,
+        m.text,
+        m.attributedBody,
         m.date as last_date,
         m.is_from_me,
         GROUP_CONCAT(DISTINCT h.id) as participants
@@ -174,30 +287,32 @@ pub fn threads(limit: Option<u32>) -> Result<Value> {
         FROM chat_message_join cmj2
         JOIN message m2 ON m2.rowid = cmj2.message_id
         WHERE cmj2.chat_id = c.rowid
-          AND m2.text IS NOT NULL
-          AND m2.text != ''
+          AND (m2.text IS NOT NULL OR m2.attributedBody IS NOT NULL)
     )
-    AND m.text IS NOT NULL
-    AND m.text != ''
-    GROUP BY c.rowid
+    AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
+    GROUP BY c.chat_identifier
     ORDER BY m.date DESC
-    LIMIT ?";
+    LIMIT ?1
+    OFFSET ?2";
 
     let mut stmt = conn.prepare(sql)?;
     let threads: Vec<Value> = stmt
-        .query_map(params![limit as i64], |row| {
+        .query_map(params![limit as i64, offset as i64], |row| {
             let chat_id: i64 = row.get(0)?;
             let chat_identifier: String = row.get(1)?;
             let display_name: Option<String> = row.get(2)?;
-            let last_message: String = row.get(3)?;
-            let last_date_apple: i64 = row.get(4)?;
-            let is_from_me: bool = row.get(5)?;
-            let participants: Option<String> = row.get(6)?;
-            Ok((chat_id, chat_identifier, display_name, last_message, last_date_apple, is_from_me, participants))
+            let text: Option<String> = row.get(3)?;
+            let attributed_body: Option<Vec<u8>> = row.get(4)?;
+            let last_date_apple: i64 = row.get(5)?;
+            let is_from_me: bool = row.get(6)?;
+            let participants: Option<String> = row.get(7)?;
+            Ok((chat_id, chat_identifier, display_name, text, attributed_body, last_date_apple, is_from_me, participants))
         })?
         .filter_map(|r| r.ok())
-        .map(|(chat_id, chat_identifier, display_name, last_message, last_date_apple, is_from_me, participants)| {
+        .map(|(chat_id, chat_identifier, display_name, text, attributed_body, last_date_apple, is_from_me, participants)| {
             let unix_ts = apple_ts_to_unix(last_date_apple);
+            let last_message = resolve_text(text, attributed_body)
+                .unwrap_or_else(|| "(attachment)".to_string());
             let participant_list: Vec<&str> = participants
                 .as_deref()
                 .unwrap_or("")
@@ -216,5 +331,10 @@ pub fn threads(limit: Option<u32>) -> Result<Value> {
         })
         .collect();
 
-    Ok(json!({ "threads": threads, "count": threads.len() }))
+    Ok(json!({
+        "threads": threads,
+        "count": threads.len(),
+        "offset": offset,
+        "next_offset": offset + limit
+    }))
 }

@@ -13,15 +13,15 @@ use rmcp::{
 };
 use serde::Deserialize;
 
-// ─── Parameter structs ────────────────────────────────────────────────────────
-
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct MessagesFetchParams {
     #[schemars(description = "Phone numbers in E.164 format (e.g. +16317457857) to filter by")]
     participants: Vec<String>,
     #[schemars(description = "Max number of messages to return (default 50, max 200)")]
     limit: Option<u32>,
-    #[schemars(description = "Unix timestamp — only return messages after this time")]
+    #[schemars(description = "Pagination cursor: only return messages before this unix timestamp (use next_cursor from previous response)")]
+    before_timestamp: Option<i64>,
+    #[schemars(description = "Only return messages after this unix timestamp")]
     after_timestamp: Option<i64>,
 }
 
@@ -39,12 +39,16 @@ struct MessagesSearchParams {
     query: String,
     #[schemars(description = "Max number of results (default 50, max 200)")]
     limit: Option<u32>,
+    #[schemars(description = "Pagination cursor: only return messages before this unix timestamp")]
+    before_timestamp: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct MessagesThreadsParams {
     #[schemars(description = "Max number of threads to return (default 20, max 100)")]
     limit: Option<u32>,
+    #[schemars(description = "Pagination offset (default 0)")]
+    offset: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -52,8 +56,6 @@ struct ContactsSearchParams {
     #[schemars(description = "Name, phone, or email to search for")]
     query: String,
 }
-
-// ─── Server handler ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 struct IMessageServer {
@@ -68,16 +70,17 @@ impl IMessageServer {
         }
     }
 
-    #[tool(description = "Fetch iMessages from a conversation. Filter by participant phone numbers (E.164 format). Returns messages ordered newest first.")]
+    #[tool(description = "Fetch iMessages from a conversation. Filter by participant phone numbers (E.164 format). Returns messages ordered newest first with cursor-based pagination.")]
     fn messages_fetch(
         &self,
         Parameters(MessagesFetchParams {
             participants,
             limit,
+            before_timestamp,
             after_timestamp,
         }): Parameters<MessagesFetchParams>,
     ) -> String {
-        match messages::fetch(participants, limit, after_timestamp) {
+        match messages::fetch(participants, limit, before_timestamp, after_timestamp) {
             Ok(v) => v.to_string(),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -94,23 +97,23 @@ impl IMessageServer {
         }
     }
 
-    #[tool(description = "Full-text search across all iMessages. Returns messages containing the query text, newest first.")]
+    #[tool(description = "Full-text search across all iMessages. Returns messages containing the query text, newest first, with cursor-based pagination.")]
     fn messages_search(
         &self,
-        Parameters(MessagesSearchParams { query, limit }): Parameters<MessagesSearchParams>,
+        Parameters(MessagesSearchParams { query, limit, before_timestamp }): Parameters<MessagesSearchParams>,
     ) -> String {
-        match messages::search(query, limit) {
+        match messages::search(query, limit, before_timestamp) {
             Ok(v) => v.to_string(),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
     }
 
-    #[tool(description = "List recent iMessage conversation threads with the last message preview and participant list.")]
+    #[tool(description = "List recent iMessage conversation threads with the last message preview and participant list. Supports offset-based pagination.")]
     fn messages_threads(
         &self,
-        Parameters(MessagesThreadsParams { limit }): Parameters<MessagesThreadsParams>,
+        Parameters(MessagesThreadsParams { limit, offset }): Parameters<MessagesThreadsParams>,
     ) -> String {
-        match messages::threads(limit) {
+        match messages::threads(limit, offset) {
             Ok(v) => v.to_string(),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
@@ -141,13 +144,11 @@ impl ServerHandler for IMessageServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
-                "iMessage MCP server — read/send messages and search contacts via macOS APIs"
+                "iMessage MCP server -- read/send messages and search contacts via macOS APIs"
                     .to_string(),
             )
     }
 }
-
-// ─── Entrypoint ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
