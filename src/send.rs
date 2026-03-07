@@ -3,26 +3,39 @@ use serde_json::{json, Value};
 use std::process::Command;
 
 /// Send an iMessage to a recipient (phone number in E.164 format or email)
-pub fn send_message(recipient: Option<&str>, chat_identifier: Option<&str>, text: &str) -> Result<Value> {
-    let escaped_text = text.replace('\\', "\\\\").replace('"', "\\\"");
+/// Supports text, file attachments, or both.
+pub fn send_message(recipient: Option<&str>, chat_identifier: Option<&str>, text: Option<&str>, file_path: Option<&str>) -> Result<Value> {
+    if text.is_none() && file_path.is_none() {
+        return Err(anyhow::anyhow!("Provide either text or file_path (or both)"));
+    }
+
+    // Validate file exists if provided
+    if let Some(path) = file_path {
+        if !std::path::Path::new(path).exists() {
+            return Err(anyhow::anyhow!("File not found: {}", path));
+        }
+    }
 
     // Group chat: send to chat by GUID
     if let Some(chat_id) = chat_identifier {
-        return send_to_group(chat_id, &escaped_text);
+        return send_to_group(chat_id, text, file_path);
     }
 
     let recipient = recipient.ok_or_else(|| anyhow::anyhow!("Provide either recipient or chat_identifier"))?;
     let escaped_recipient = recipient.replace('"', "\\\"");
 
+    // Build the send commands
+    let send_commands = build_send_commands("targetBuddy", text, file_path);
+
     let script = format!(
         r#"tell application "Messages"
     set targetService to 1st service whose service type = iMessage
     set targetBuddy to buddy "{recipient}" of targetService
-    send "{text}" to targetBuddy
+    {commands}
     return "sent"
 end tell"#,
         recipient = escaped_recipient,
-        text = escaped_text
+        commands = send_commands
     );
 
     let output = Command::new("osascript")
@@ -43,15 +56,16 @@ end tell"#,
 
         // Try SMS fallback if iMessage buddy not found
         if stderr.contains("buddy") || stderr.contains("service") {
+            let sms_commands = build_send_commands("targetBuddy", text, file_path);
             let sms_script = format!(
                 r#"tell application "Messages"
     set targetService to 1st service whose service type = SMS
     set targetBuddy to buddy "{recipient}" of targetService
-    send "{text}" to targetBuddy
+    {commands}
     return "sent"
 end tell"#,
                 recipient = escaped_recipient,
-                text = escaped_text
+                commands = sms_commands
             );
 
             let sms_output = Command::new("osascript")
@@ -77,20 +91,33 @@ end tell"#,
     }
 }
 
-/// Send a message to a group chat by its chat identifier (GUID)
-fn send_to_group(chat_id: &str, escaped_text: &str) -> Result<Value> {
-    let escaped_chat_id = chat_id.replace('"', "\\\"");
+/// Build AppleScript send commands for text and/or file
+fn build_send_commands(target_var: &str, text: Option<&str>, file_path: Option<&str>) -> String {
+    let mut commands = Vec::new();
+    if let Some(path) = file_path {
+        let escaped_path = path.replace('"', "\\\"");
+        commands.push(format!("send POSIX file \"{}\" to {}", escaped_path, target_var));
+    }
+    if let Some(t) = text {
+        let escaped = t.replace('\\', "\\\\").replace('"', "\\\"");
+        commands.push(format!("send \"{}\" to {}", escaped, target_var));
+    }
+    commands.join("\n    ")
+}
 
-    // Find the chat by looking for its GUID prefix in Messages.app
-    // Group chats in Messages.app have a GUID like "iMessage;+;chat123456789"
+/// Send a message to a group chat by its chat identifier (GUID)
+fn send_to_group(chat_id: &str, text: Option<&str>, file_path: Option<&str>) -> Result<Value> {
+    let escaped_chat_id = chat_id.replace('"', "\\\"");
+    let send_commands = build_send_commands("targetChat", text, file_path);
+
     let script = format!(
         r#"tell application "Messages"
     set targetChat to a reference to chat id "iMessage;+;{chat_id}"
-    send "{text}" to targetChat
+    {commands}
     return "sent"
 end tell"#,
         chat_id = escaped_chat_id,
-        text = escaped_text
+        commands = send_commands
     );
 
     let output = Command::new("osascript")
@@ -107,23 +134,23 @@ end tell"#,
         }));
     }
 
-    // Try without the iMessage prefix (some chats use SMS;+; or other prefixes)
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
     // Try finding by iterating chats
+    let fallback_commands = build_send_commands("c", text, file_path);
     let fallback_script = format!(
         r#"tell application "Messages"
     set allChats to every chat
     repeat with c in allChats
         if id of c contains "{chat_id}" then
-            send "{text}" to c
+            {commands}
             return "sent"
         end if
     end repeat
     return "chat not found"
 end tell"#,
         chat_id = escaped_chat_id,
-        text = escaped_text
+        commands = fallback_commands
     );
 
     let fallback_output = Command::new("osascript")

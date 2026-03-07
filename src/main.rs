@@ -33,8 +33,10 @@ struct MessagesSendParams {
     recipient: Option<String>,
     #[schemars(description = "Chat identifier for group chats (from messages_threads). Use this OR recipient, not both.")]
     chat_identifier: Option<String>,
-    #[schemars(description = "Message text to send")]
-    text: String,
+    #[schemars(description = "Message text to send. Optional if sending a file only.")]
+    text: Option<String>,
+    #[schemars(description = "Absolute path to a file/image to send (e.g. /Users/you/Desktop/photo.jpg). Can be combined with text.")]
+    file_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -91,12 +93,12 @@ impl IMessageServer {
         }
     }
 
-    #[tool(description = "Send an iMessage or SMS. For 1-on-1: provide recipient (phone E.164 or email). For group chats: provide chat_identifier from messages_threads. Messages.app must be running.")]
+    #[tool(description = "Send an iMessage or SMS. For 1-on-1: provide recipient (phone E.164 or email). For group chats: provide chat_identifier from messages_threads. Can send text, files/images, or both. Messages.app must be running.")]
     fn messages_send(
         &self,
-        Parameters(MessagesSendParams { recipient, chat_identifier, text }): Parameters<MessagesSendParams>,
+        Parameters(MessagesSendParams { recipient, chat_identifier, text, file_path }): Parameters<MessagesSendParams>,
     ) -> String {
-        match send::send_message(recipient.as_deref(), chat_identifier.as_deref(), &text) {
+        match send::send_message(recipient.as_deref(), chat_identifier.as_deref(), text.as_deref(), file_path.as_deref()) {
             Ok(v) => v.to_string(),
             Err(e) => format!("{{\"error\": \"{}\"}}", e),
         }
