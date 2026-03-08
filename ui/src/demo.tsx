@@ -9,12 +9,14 @@ import {
 } from "./imessage-components";
 
 const messages = [
-  { text: "yo are you free tonight? thinking about grabbing dinner", sender: "Jake Vollkommer", time: "2:14 PM", isMe: false, showAvatar: true },
-  { text: "yeah down! where were you thinking?", sender: "You", time: "2:16 PM", isMe: true, showAvatar: false },
-  { text: "that new sushi place on brickell? heard its fire", sender: "Jake Vollkommer", time: "2:17 PM", isMe: false, showAvatar: true },
-  { text: "oh sushi sounds perfect. 7pm work?", sender: "You", time: "2:18 PM", isMe: true, showAvatar: false },
-  { text: "perfect see you there", sender: "Jake Vollkommer", time: "2:19 PM", isMe: false, showAvatar: true },
-  { text: "bet", sender: "You", time: "2:19 PM", isMe: true, showAvatar: false },
+  { text: "yo are you free tonight? thinking about grabbing dinner", sender: "Jake Vollkommer", time: "", isMe: false, showAvatar: false, showTime: false, isGroupEnd: false },
+  { text: "theres a few good spots on brickell", sender: "Jake Vollkommer", time: "2:14 PM", isMe: false, showAvatar: true, showTime: true, isGroupEnd: true },
+  { text: "yeah down! where were you thinking?", sender: "You", time: "2:16 PM", isMe: true, showAvatar: false, showTime: true, isGroupEnd: true },
+  { text: "that new sushi place on brickell? heard its fire", sender: "Jake Vollkommer", time: "2:17 PM", isMe: false, showAvatar: true, showTime: true, isGroupEnd: true },
+  { text: "oh sushi sounds perfect", sender: "You", time: "", isMe: true, showAvatar: false, showTime: false, isGroupEnd: false },
+  { text: "7pm work?", sender: "You", time: "2:18 PM", isMe: true, showAvatar: false, showTime: true, isGroupEnd: true },
+  { text: "perfect see you there", sender: "Jake Vollkommer", time: "2:19 PM", isMe: false, showAvatar: true, showTime: true, isGroupEnd: true },
+  { text: "bet", sender: "You", time: "", isMe: true, showAvatar: false, showTime: false, isGroupEnd: true },
 ];
 
 const threads = [
@@ -38,42 +40,26 @@ function ConversationView() {
     <div>
       <div
         style={{
-          padding: "12px 16px",
-          borderBottom: "0.5px solid rgba(0,0,0,0.08)",
+          padding: "14px 16px",
+          borderBottom: "0.5px solid rgba(0,0,0,0.06)",
           display: "flex",
           alignItems: "center",
-          gap: 10,
+          justifyContent: "center",
+          flexDirection: "column",
+          gap: 2,
         }}
       >
-        <div
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: 16,
-            background: "linear-gradient(135deg, #A2A2A7, #C7C7CC)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontSize: 12,
-            fontWeight: 600,
-            color: "#FFF",
-          }}
-        >
-          JV
-        </div>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 600 }}>Jake Vollkommer</div>
-          <div style={{ fontSize: 12, color: "rgba(0,0,0,0.4)" }}>iMessage</div>
-        </div>
+        <div style={{ fontSize: 16, fontWeight: 600 }}>Jake Vollkommer</div>
+        <div style={{ fontSize: 12, color: "rgba(0,0,0,0.35)" }}>iMessage</div>
       </div>
-      <div style={{ padding: "16px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ textAlign: "center", fontSize: 12, color: "rgba(0,0,0,0.35)", margin: "4px 0 8px" }}>
-          Today, Mar 6
+      <div style={{ padding: "12px 10px 16px", display: "flex", flexDirection: "column", gap: 0 }}>
+        <div style={{ textAlign: "center", fontSize: 12, color: "rgba(0,0,0,0.3)", margin: "4px 0 12px", fontWeight: 500 }}>
+          Today 2:14 PM
         </div>
         {messages.map((m, i) => (
           <MessageBubble key={i} props={m} />
         ))}
-        <div style={{ textAlign: "center", fontSize: 11, color: "rgba(0,0,0,0.3)", marginTop: 8 }}>
+        <div style={{ textAlign: "center", fontSize: 11, color: "rgba(0,0,0,0.28)", marginTop: 6, fontWeight: 400 }}>
           Delivered
         </div>
       </div>
@@ -84,15 +70,9 @@ function ConversationView() {
 function ThreadsView() {
   return (
     <div>
-      <div style={{ padding: "12px 16px", borderBottom: "0.5px solid rgba(0,0,0,0.08)" }}>
-        <div style={{ fontSize: 15, fontWeight: 600 }}>Messages</div>
-        <div style={{ fontSize: 12, color: "rgba(0,0,0,0.4)", marginTop: 2 }}>5 conversations</div>
-      </div>
-      <div style={{ padding: "0 16px" }}>
-        {threads.map((t, i) => (
-          <ThreadRow key={i} props={t} />
-        ))}
-      </div>
+      {threads.map((t, i) => (
+        <ThreadRow key={i} props={t} />
+      ))}
     </div>
   );
 }
@@ -114,34 +94,32 @@ function ContactView() {
 function SearchView() {
   return (
     <div>
-      <div style={{ padding: "12px 16px", borderBottom: "0.5px solid rgba(0,0,0,0.08)" }}>
+      <div style={{ padding: "12px 16px" }}>
         <div
           style={{
-            backgroundColor: "rgba(0,0,0,0.05)",
+            backgroundColor: "rgba(0,0,0,0.04)",
             borderRadius: 10,
-            padding: "8px 12px",
-            fontSize: 14,
-            color: "rgba(0,0,0,0.4)",
+            padding: "9px 12px",
+            fontSize: 15,
+            color: "rgba(0,0,0,0.35)",
             display: "flex",
             alignItems: "center",
-            gap: 6,
+            gap: 8,
           }}
         >
-          <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="8.5" cy="8.5" r="6" />
-            <line x1="13" y1="13" x2="18" y2="18" />
+          <svg width="15" height="15" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+            <circle cx="8.5" cy="8.5" r="5.5" />
+            <line x1="12.5" y1="12.5" x2="17" y2="17" />
           </svg>
-          <span>dinner</span>
+          <span style={{ color: "rgba(0,0,0,0.7)" }}>dinner</span>
         </div>
-        <div style={{ fontSize: 12, color: "rgba(0,0,0,0.4)", marginTop: 8 }}>
-          3 results across all conversations
+        <div style={{ fontSize: 13, color: "rgba(0,0,0,0.35)", marginTop: 10, fontWeight: 500 }}>
+          3 results
         </div>
       </div>
-      <div style={{ padding: "0 16px" }}>
-        {searchResults.map((r, i) => (
-          <SearchResult key={i} props={r} />
-        ))}
-      </div>
+      {searchResults.map((r, i) => (
+        <SearchResult key={i} props={r} />
+      ))}
     </div>
   );
 }
@@ -152,29 +130,21 @@ function Demo() {
   return (
     <div
       style={{
-        maxWidth: 420,
-        margin: "0 auto",
-        fontFamily:
-          '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif',
+        maxWidth: 390,
+        margin: "24px auto",
+        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif',
         WebkitFontSmoothing: "antialiased",
+        MozOsxFontSmoothing: "grayscale",
       }}
     >
-      {/* Header */}
-      <div style={{ padding: "20px 16px 12px" }}>
-        <h1 style={{ fontSize: 28, fontWeight: 700, letterSpacing: -0.5 }}>
-          iMessage UI
-        </h1>
-        <p style={{ fontSize: 13, color: "rgba(0,0,0,0.4)", marginTop: 4 }}>
-          json-render MCP preview
-        </p>
-      </div>
-
       {/* Tab Bar */}
       <div
         style={{
           display: "flex",
           gap: 0,
-          padding: "0 16px",
+          backgroundColor: "rgba(0,0,0,0.03)",
+          borderRadius: 10,
+          padding: 3,
           marginBottom: 16,
         }}
       >
@@ -184,15 +154,16 @@ function Demo() {
             onClick={() => setActive(i)}
             style={{
               flex: 1,
-              padding: "8px 0",
+              padding: "7px 0",
               fontSize: 13,
               fontWeight: i === active ? 600 : 400,
-              color: i === active ? "#007AFF" : "rgba(0,0,0,0.4)",
-              background: "none",
+              color: i === active ? "#000000" : "rgba(0,0,0,0.4)",
+              background: i === active ? "#FFFFFF" : "transparent",
               border: "none",
-              borderBottom: i === active ? "2px solid #007AFF" : "2px solid transparent",
+              borderRadius: 8,
               cursor: "pointer",
-              transition: "all 0.15s ease",
+              transition: "all 0.2s ease",
+              boxShadow: i === active ? "0 1px 3px rgba(0,0,0,0.08)" : "none",
             }}
           >
             {label}
@@ -204,20 +175,15 @@ function Demo() {
       <div
         style={{
           backgroundColor: "#FFFFFF",
-          borderRadius: 16,
-          border: "0.5px solid rgba(0,0,0,0.08)",
+          borderRadius: 14,
           overflow: "hidden",
-          boxShadow: "0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.03)",
+          boxShadow: "0 0 0 0.5px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.04), 0 8px 24px rgba(0,0,0,0.03)",
         }}
       >
         {active === 0 && <ConversationView />}
         {active === 1 && <ThreadsView />}
         {active === 2 && <ContactView />}
         {active === 3 && <SearchView />}
-      </div>
-
-      <div style={{ textAlign: "center", fontSize: 11, color: "rgba(0,0,0,0.25)", padding: "16px 0" }}>
-        Rendered via render-imessage-ui MCP tool
       </div>
     </div>
   );
