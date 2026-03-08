@@ -1,4 +1,16 @@
-import { useState, useEffect, useSyncExternalStore } from "react";
+import { useState, useEffect, useRef, useSyncExternalStore } from "react";
+
+// ---- Safe value coercion (raw JSON data may contain objects/arrays) ----
+function str(v: unknown): string {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return "";
+}
+
+function arr(v: unknown): unknown[] {
+  return Array.isArray(v) ? v : [];
+}
 
 // ---- Color system ----
 const BLUE = "#007AFF";
@@ -121,9 +133,9 @@ function AvatarCircle({
 
 // ---- Message Bubble ----
 export function MessageBubble({ props }: { props: Record<string, unknown> }) {
-  const text = (props.text as string) || "";
-  const sender = (props.sender as string) || "";
-  const time = (props.time as string) || "";
+  const text = str(props.text);
+  const sender = str(props.sender);
+  const time = str(props.time);
   const isMe = props.isMe === true || props.isMe === "true";
   const showAvatar = props.showAvatar === true || props.showAvatar === "true";
   const showTime = props.showTime !== false && props.showTime !== "false";
@@ -189,10 +201,10 @@ export function MessageBubble({ props }: { props: Record<string, unknown> }) {
 }
 
 // ---- Thread Row ----
-export function ThreadRow({ props }: { props: Record<string, unknown> }) {
-  const name = (props.name as string) || "";
-  const preview = (props.preview as string) || "";
-  const time = (props.time as string) || "";
+export function ThreadRow({ props, onClick }: { props: Record<string, unknown>; onClick?: () => void }) {
+  const name = str(props.name);
+  const preview = str(props.preview);
+  const time = str(props.time);
   const unread = props.unread === true || props.unread === "true";
   const dark = useIsDark();
   const [hovered, setHovered] = useState(false);
@@ -201,11 +213,14 @@ export function ThreadRow({ props }: { props: Record<string, unknown> }) {
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onClick={onClick}
       style={{
         display: "flex",
         alignItems: "center",
         gap: 12,
         padding: "11px 16px",
+        width: "100%",
+        boxSizing: "border-box",
         borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
         cursor: "pointer",
         backgroundColor: hovered
@@ -274,9 +289,9 @@ export function ThreadRow({ props }: { props: Record<string, unknown> }) {
 
 // ---- Contact Card ----
 export function ContactCardComponent({ props }: { props: Record<string, unknown> }) {
-  const name = (props.name as string) || "";
-  const phones = (props.phones as string) || "";
-  const emails = (props.emails as string) || "";
+  const name = str(props.name);
+  const phones = str(props.phones);
+  const emails = str(props.emails);
   const dark = useIsDark();
 
   const phoneList = phones.split(",").map((p) => p.trim()).filter(Boolean);
@@ -383,10 +398,10 @@ export function ContactCardComponent({ props }: { props: Record<string, unknown>
 
 // ---- Search Result ----
 export function SearchResult({ props }: { props: Record<string, unknown> }) {
-  const sender = (props.sender as string) || "";
-  const text = (props.text as string) || "";
-  const time = (props.time as string) || "";
-  const query = (props.query as string) || "";
+  const sender = str(props.sender);
+  const text = str(props.text);
+  const time = str(props.time);
+  const query = str(props.query);
   const dark = useIsDark();
   const [hovered, setHovered] = useState(false);
 
@@ -450,6 +465,341 @@ export function SearchResult({ props }: { props: Record<string, unknown> }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---- Loading Skeletons ----
+function SkeletonPulse({ width, height, radius = 4 }: { width: string | number; height: number; radius?: number }) {
+  const dark = useIsDark();
+  return (
+    <div
+      style={{
+        width,
+        height,
+        borderRadius: radius,
+        backgroundColor: dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
+        animation: "skeleton-pulse 1.5s ease-in-out infinite",
+      }}
+    />
+  );
+}
+
+export function ThreadListSkeleton() {
+  const dark = useIsDark();
+  return (
+    <div style={{ width: "100%" }}>
+      <style>{`@keyframes skeleton-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }`}</style>
+      {[0, 1, 2, 3, 4].map((i) => (
+        <div
+          key={i}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            padding: "11px 16px",
+            borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
+          }}
+        >
+          <SkeletonPulse width={48} height={48} radius={24} />
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+            <SkeletonPulse width={120 + i * 20} height={14} />
+            <SkeletonPulse width="80%" height={12} />
+          </div>
+          <SkeletonPulse width={40} height={12} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---- Time Formatting ----
+export function formatTimestamp(unix: number): string {
+  const date = new Date(unix * 1000);
+  const now = new Date();
+  const diff = now.getTime() - date.getTime();
+  const days = Math.floor(diff / 86400000);
+
+  if (days === 0) {
+    return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  }
+  if (days === 1) return "Yesterday";
+  if (days < 7) return date.toLocaleDateString([], { weekday: "long" });
+  if (date.getFullYear() === now.getFullYear()) {
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  }
+  return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
+// ---- Auto-render: Thread List View ----
+interface ThreadData {
+  chat_id: number;
+  chat_identifier: string;
+  display_name: string | null;
+  last_message: string;
+  last_timestamp: number;
+  last_is_from_me: boolean;
+  participants: Array<{ handle: string; name: string | null }>;
+  recent_messages?: MessageData[];
+}
+
+interface MessageData {
+  id: number;
+  text: string;
+  timestamp: number;
+  is_from_me: boolean;
+  sender: string;
+  sender_name?: string;
+  chat_identifier: string;
+}
+
+export function ThreadListView({ threads }: { threads: ThreadData[] }) {
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const dark = useIsDark();
+
+  if (selectedIdx !== null) {
+    const thread = threads[selectedIdx];
+    const messages = arr(thread.recent_messages) as MessageData[];
+    const name = str(thread.display_name) || str(thread.chat_identifier);
+    return (
+      <div style={{ width: "100%" }}>
+        <div
+          onClick={() => setSelectedIdx(null)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "12px 16px",
+            cursor: "pointer",
+            borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
+            color: BLUE,
+            fontSize: 16,
+            fontWeight: 500,
+          }}
+        >
+          <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
+            <path d="M7 1L1.5 7L7 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>{name}</span>
+        </div>
+        <ConversationView messages={messages} />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ width: "100%" }}>
+      {threads.map((t: any, i: number) => (
+        <ThreadRow
+          key={t.chat_id || i}
+          onClick={arr(t.recent_messages).length ? () => setSelectedIdx(i) : undefined}
+          props={{
+            name: str(t.display_name) || str(t.chat_identifier),
+            preview: (t.last_is_from_me ? "You: " : "") + str(t.last_message),
+            time: formatTimestamp(t.last_timestamp),
+            unread: false,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ---- Auto-render: Conversation View ----
+export function ConversationView({ messages }: { messages: MessageData[] }) {
+  const bottomRef = useRef<HTMLDivElement>(null);
+  // Messages come newest-first, reverse for chronological display
+  const chronological = [...messages].reverse();
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "instant" });
+  }, [messages]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "8px 12px", width: "100%", boxSizing: "border-box" }}>
+      {chronological.map((m, i) => {
+        const prev = chronological[i - 1];
+        const next = chronological[i + 1];
+        const showAvatar = !m.is_from_me && (!prev || prev.is_from_me || prev.sender !== m.sender);
+        const isGroupEnd = !next || next.is_from_me !== m.is_from_me || next.sender !== m.sender;
+        return (
+          <MessageBubble
+            key={m.id || i}
+            props={{
+              text: str(m.text),
+              sender: str(m.sender_name) || str(m.sender),
+              time: formatTimestamp(m.timestamp),
+              isMe: m.is_from_me,
+              showAvatar,
+              showTime: isGroupEnd,
+              isGroupEnd,
+            }}
+          />
+        );
+      })}
+      <div ref={bottomRef} />
+    </div>
+  );
+}
+
+// ---- Auto-render: Contact List View ----
+interface ContactData {
+  name: string;
+  phones: string[];
+  emails: string[];
+}
+
+function ContactRow({ contact, onClick }: { contact: ContactData; onClick: () => void }) {
+  const dark = useIsDark();
+  const [hovered, setHovered] = useState(false);
+  const phones = arr(contact.phones).map(str);
+  const emails = arr(contact.emails).map(str);
+  const subtitle = phones[0] || emails[0] || "";
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "11px 16px",
+        width: "100%",
+        boxSizing: "border-box",
+        borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
+        cursor: "pointer",
+        backgroundColor: hovered
+          ? dark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.03)"
+          : "transparent",
+        transition: "background-color 0.15s ease",
+      }}
+    >
+      <AvatarCircle name={str(contact.name)} size={40} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 16, fontWeight: 500, color: dark ? "#FFFFFF" : "#000000" }}>
+          {str(contact.name)}
+        </div>
+        {subtitle && (
+          <div style={{ fontSize: 14, color: dark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.4)", marginTop: 1 }}>
+            {subtitle}
+          </div>
+        )}
+      </div>
+      <svg width="7" height="12" viewBox="0 0 7 12" fill="none" style={{ opacity: 0.3, flexShrink: 0 }}>
+        <path d="M1 1L6 6L1 11" stroke={dark ? "#FFF" : "#000"} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </div>
+  );
+}
+
+export function ContactListView({ contacts }: { contacts: ContactData[] }) {
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const dark = useIsDark();
+
+  if (selectedIdx !== null) {
+    const c = contacts[selectedIdx];
+    return (
+      <div style={{ width: "100%" }}>
+        <div
+          onClick={() => setSelectedIdx(null)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "12px 16px",
+            cursor: "pointer",
+            borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
+            color: BLUE,
+            fontSize: 16,
+            fontWeight: 500,
+          }}
+        >
+          <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
+            <path d="M7 1L1.5 7L7 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>Contacts</span>
+        </div>
+        <ContactCardComponent
+          props={{
+            name: str(c.name),
+            phones: arr(c.phones).map(str).join(", "),
+            emails: arr(c.emails).map(str).join(", "),
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ width: "100%" }}>
+      {contacts.map((c, i) => (
+        <ContactRow key={i} contact={c} onClick={() => setSelectedIdx(i)} />
+      ))}
+    </div>
+  );
+}
+
+// ---- Auto-render: Contact Me View ----
+export function ContactMeView({ me }: { me: ContactData }) {
+  return (
+    <div style={{ width: "100%" }}>
+      <ContactCardComponent
+        props={{
+          name: str(me.name),
+          phones: arr(me.phones).map(str).join(", "),
+          emails: arr(me.emails).map(str).join(", "),
+        }}
+      />
+    </div>
+  );
+}
+
+// ---- Auto-render: Send Result View ----
+export function SendResultView({ data }: { data: { success: boolean; message: string; recent_messages?: MessageData[] } }) {
+  const dark = useIsDark();
+
+  return (
+    <div style={{ width: "100%" }}>
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "10px 16px",
+        backgroundColor: dark ? "rgba(48,209,88,0.12)" : "rgba(52,199,89,0.08)",
+        borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
+      }}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="8" r="8" fill={dark ? "#30D158" : "#34C759"} />
+          <path d="M4.5 8L7 10.5L11.5 5.5" stroke="#FFF" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        <span style={{ fontSize: 14, fontWeight: 500, color: dark ? "#30D158" : "#34C759" }}>
+          {str(data.message) || "Message sent"}
+        </span>
+      </div>
+      {arr(data.recent_messages).length > 0 && (
+        <ConversationView messages={arr(data.recent_messages) as MessageData[]} />
+      )}
+    </div>
+  );
+}
+
+// ---- Auto-render: Search Results View ----
+export function SearchResultsView({ messages, query }: { messages: MessageData[]; query: string }) {
+  return (
+    <div style={{ width: "100%" }}>
+      {messages.map((m, i) => (
+        <SearchResult
+          key={m.id || i}
+          props={{
+            sender: str(m.sender_name) || str(m.sender),
+            text: str(m.text),
+            time: formatTimestamp(m.timestamp),
+            query: str(query),
+          }}
+        />
+      ))}
     </div>
   );
 }

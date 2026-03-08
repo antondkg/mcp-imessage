@@ -322,10 +322,43 @@ pub fn search(
     }))
 }
 
+fn fetch_messages_for_chat(conn: &Connection, chat_identifier: &str, limit: u32) -> Result<Vec<Value>> {
+    let sql = "SELECT m.rowid, m.text, m.attributedBody, m.date, m.is_from_me,
+                      h.id as handle_id, c.chat_identifier
+               FROM message m
+               LEFT JOIN handle h ON m.handle_id = h.rowid
+               JOIN chat_message_join cmj ON cmj.message_id = m.rowid
+               JOIN chat c ON c.rowid = cmj.chat_id
+               WHERE c.chat_identifier = ?1
+                 AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
+               ORDER BY m.date DESC
+               LIMIT ?2";
+    let mut stmt = conn.prepare(sql)?;
+    let messages = stmt
+        .query_map(params![chat_identifier, limit as i64], |row| {
+            let rowid: i64 = row.get(0)?;
+            let text: Option<String> = row.get(1)?;
+            let attributed_body: Option<Vec<u8>> = row.get(2)?;
+            let date_apple: i64 = row.get(3)?;
+            let is_from_me: bool = row.get(4)?;
+            let handle_id: Option<String> = row.get(5)?;
+            let chat_id: String = row.get(6)?;
+            Ok((rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id))
+        })?
+        .filter_map(|r| r.ok())
+        .filter_map(|(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
+            let resolved = resolve_text(text, attributed_body)?;
+            Some(row_to_message(rowid, resolved, date_apple, is_from_me, handle_id, chat_id))
+        })
+        .collect();
+    Ok(messages)
+}
+
 pub fn threads(limit: Option<u32>, offset: Option<u32>) -> Result<Value> {
     let conn = open_db()?;
-    let limit = limit.unwrap_or(20).min(100);
+    let limit = limit.unwrap_or(5).min(100);
     let offset = offset.unwrap_or(0);
+    let include_messages = limit <= 5;
 
     let sql = "WITH latest_msg AS (
         SELECT
@@ -357,7 +390,7 @@ pub fn threads(limit: Option<u32>, offset: Option<u32>) -> Result<Value> {
     OFFSET ?2";
 
     let mut stmt = conn.prepare(sql)?;
-    let threads: Vec<Value> = stmt
+    let mut threads: Vec<Value> = stmt
         .query_map(params![limit as i64, offset as i64], |row| {
             let chat_id: i64 = row.get(0)?;
             let chat_identifier: String = row.get(1)?;
@@ -405,6 +438,20 @@ pub fn threads(limit: Option<u32>, offset: Option<u32>) -> Result<Value> {
             })
         })
         .collect();
+
+    // When showing <= 5 threads, include 10 recent messages per thread
+    if include_messages {
+        for thread in threads.iter_mut() {
+            let chat_id = thread["chat_identifier"].as_str().unwrap_or("").to_string();
+            if !chat_id.is_empty() {
+                if let Ok(msgs) = fetch_messages_for_chat(&conn, &chat_id, 10) {
+                    if let Some(obj) = thread.as_object_mut() {
+                        obj.insert("recent_messages".to_string(), json!(msgs));
+                    }
+                }
+            }
+        }
+    }
 
     Ok(json!({
         "threads": threads,
