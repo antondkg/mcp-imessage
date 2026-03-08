@@ -17,35 +17,51 @@ function loadHtml(): string {
   return fs.readFileSync(htmlPath, "utf-8");
 }
 
-const TOOL_DESCRIPTION = `Render an interactive UI for iMessage data. Use this tool to display conversations, thread lists, contact cards, and search results from the iMessage MCP server as rich visual components.
+const TOOL_DESCRIPTION = `Render iMessage data as a native iOS-style UI. Use after calling iMessage MCP tools (messages_fetch, messages_threads, messages_search, contacts_search, contacts_me).
 
-WHEN TO USE THIS TOOL:
-- After fetching messages via messages_fetch, render them as a conversation view
-- After listing threads via messages_threads, render them as a thread list
-- After searching messages via messages_search, render search results
-- After looking up contacts via contacts_search or contacts_me, render contact cards
+CUSTOM iMESSAGE COMPONENTS (prefer these over generic shadcn):
+
+1. MessageBubble - Native iMessage chat bubble
+   Props: text (string), sender (string), time (string), isMe (boolean), showAvatar (boolean|null)
+   - isMe=true: blue bubble, right-aligned (sent messages)
+   - isMe=false: gray bubble, left-aligned (received messages)
+   - showAvatar=true: shows sender initials on received messages
+
+2. ThreadRow - Conversation list row
+   Props: name (string), preview (string), time (string), unread (boolean|null)
+   - Shows avatar initials, name, last message preview, time
+   - unread=true: bold name, blue time, blue dot indicator
+
+3. ContactCard - iOS contact card
+   Props: name (string), phones (string|null), emails (string|null)
+   - Centered avatar, name, phone/email in iOS blue
+   - Comma-separate multiple phones or emails
+
+4. SearchResult - Search result row
+   Props: sender (string), text (string), time (string), query (string|null)
+   - Shows avatar, sender name, message text with query highlighted, time
 
 RENDERING PATTERNS:
 
-1. CONVERSATION VIEW (after messages_fetch):
-Use a Card as container, with Stacks of message bubbles. For each message:
-- Use a Stack (direction="horizontal", gap=2) with Avatar + Card
-- Sent messages (is_from_me=true): align right, use primary-colored Card
-- Received messages: align left, use secondary Card
-- Show sender_name or "You", timestamp as muted Text
+CONVERSATION (after messages_fetch):
+Root: Stack(direction=vertical, gap=sm)
+  Children: one MessageBubble per message
+  - Set isMe=true for is_from_me messages, false otherwise
+  - Set showAvatar=true on first message or when sender changes
+  - Use sender_name for sender, format timestamp for time
 
-2. THREAD LIST (after messages_threads):
-Use a Stack of Cards, one per thread. Each Card contains:
-- Heading with display_name
-- Text (variant="muted") with last message preview
-- Badge with timestamp
-- Text (variant="caption") with participant count
+THREAD LIST (after messages_threads):
+Root: Stack(direction=vertical, gap=none)
+  Children: one ThreadRow per thread
+  - Use display_name for name, last_message for preview
 
-3. CONTACT CARD (after contacts_search/contacts_me):
-Use a Card with Avatar + Stack of contact details (name, phones, emails)
+CONTACT (after contacts_search/contacts_me):
+Root: ContactCard with name, phones, emails from the contact data
 
-4. SEARCH RESULTS (after messages_search):
-Use a Stack of Cards showing matching messages with highlighted context`;
+SEARCH (after messages_search):
+Root: Stack(direction=vertical, gap=none)
+  Children: one SearchResult per match
+  - Pass the original search query as the query prop for highlighting`;
 
 async function main() {
   const html = loadHtml();

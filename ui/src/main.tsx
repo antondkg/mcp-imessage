@@ -6,62 +6,28 @@ import { JSONUIProvider, Renderer, defineRegistry } from "@json-render/react";
 import { shadcnComponents } from "@json-render/shadcn";
 import type { Spec } from "@json-render/core";
 import { catalog } from "./catalog";
+import {
+  MessageBubble,
+  ThreadRow,
+  ContactCardComponent,
+  SearchResult,
+} from "./imessage-components";
 
 const { registry } = defineRegistry(catalog, {
   components: {
     ...shadcnComponents,
-    Avatar: ({ props }: { props: Record<string, unknown> }) => {
-      const name = (props.name as string) || (props.alt as string) || "?";
-      const src = props.src as string | undefined;
-      const initials = name
-        .split(" ")
-        .map((n) => n[0])
-        .join("")
-        .slice(0, 2)
-        .toUpperCase();
-      const size = props.size === "lg" ? 48 : props.size === "sm" ? 32 : 40;
-      const [imgFailed, setImgFailed] = useState(false);
-      const onError = useCallback(() => setImgFailed(true), []);
-      const showImg = src && !imgFailed;
-
-      return (
-        <div
-          style={{
-            width: size,
-            height: size,
-            borderRadius: "50%",
-            overflow: "hidden",
-            backgroundColor: "var(--color-background-tertiary, #27272a)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            flexShrink: 0,
-          }}
-        >
-          {showImg ? (
-            <img
-              src={src}
-              alt={name}
-              referrerPolicy="no-referrer"
-              crossOrigin="anonymous"
-              width={size}
-              height={size}
-              onError={onError}
-              style={{ objectFit: "cover", width: size, height: size }}
-            />
-          ) : (
-            <span
-              style={{
-                fontSize: size * 0.4,
-                color: "var(--color-text-secondary, #a1a1aa)",
-              }}
-            >
-              {initials}
-            </span>
-          )}
-        </div>
-      );
-    },
+    MessageBubble: ({ props }: { props: Record<string, unknown> }) => (
+      <MessageBubble props={props} />
+    ),
+    ThreadRow: ({ props }: { props: Record<string, unknown> }) => (
+      <ThreadRow props={props} />
+    ),
+    ContactCard: ({ props }: { props: Record<string, unknown> }) => (
+      <ContactCardComponent props={props} />
+    ),
+    SearchResult: ({ props }: { props: Record<string, unknown> }) => (
+      <SearchResult props={props} />
+    ),
   },
 });
 
@@ -218,7 +184,7 @@ function McpAppView() {
 
   return (
     <JSONUIProvider registry={registry} initialState={spec.state ?? {}}>
-      <div className="w-full">
+      <div className="w-full" style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif' }}>
         <Renderer spec={spec} registry={registry} />
       </div>
     </JSONUIProvider>

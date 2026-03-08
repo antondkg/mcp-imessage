@@ -1,6 +1,6 @@
 @import "tailwindcss";
-@source "../node_modules/@json-render/shadcn/src";
-@source "../node_modules/@json-render/react/src";
+@source "../node_modules/@json-render/shadcn/dist";
+@source "../node_modules/@json-render/react/dist";
 
 @custom-variant dark (&:is([data-theme="dark"] *));
 
