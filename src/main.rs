@@ -57,7 +57,7 @@ fn make_threads_tool_route() -> ToolRoute<IMessageServer> {
 
     let mut tool_def = Tool::new(
         "messages_threads",
-        Cow::Borrowed("List recent iMessage conversation threads. Returns 5 most recent threads by default, each with 10 recent messages for inline viewing. Use default unless user asks for more. When limit > 5, messages are omitted to reduce payload."),
+        Cow::Borrowed("List recent iMessage conversation threads. Returns 5 most recent threads by default with 10 messages each for inline viewing. To open a specific person's conversation, use messages_fetch with 'name' instead. Use this tool to browse recent conversations or find group chat identifiers."),
         schema,
     );
     tool_def.meta = Some(make_ui_meta());
@@ -78,14 +78,18 @@ fn make_threads_tool_route() -> ToolRoute<IMessageServer> {
 
 fn make_fetch_tool_route() -> ToolRoute<IMessageServer> {
     let schema = make_schema(json!({
+        "name": {
+            "type": "string",
+            "description": "Contact name to fetch conversation with (e.g. 'Jake Vollkommer'). Resolves to phone number automatically via contacts lookup. This is the easiest way to open a conversation."
+        },
         "participants": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "Phone numbers in E.164 format (e.g. +16317457857) to filter by. For group chats, leave empty and use chat_identifier instead."
+            "description": "Phone numbers in E.164 format (e.g. +16317457857). Use 'name' instead if you know the contact name."
         },
         "chat_identifier": {
             "type": "string",
-            "description": "Chat identifier for group chats (e.g. chat696614010123836136). Get this from messages_threads. Use this OR participants, not both."
+            "description": "Chat identifier for group chats (e.g. chat696614010123836136). Get this from messages_threads."
         },
         "limit": {
             "type": "integer",
@@ -103,7 +107,7 @@ fn make_fetch_tool_route() -> ToolRoute<IMessageServer> {
 
     let mut tool_def = Tool::new(
         "messages_fetch",
-        Cow::Borrowed("Fetch iMessages from a conversation. Filter by participant phone numbers (E.164 format) or chat_identifier. Returns messages ordered newest first with cursor-based pagination."),
+        Cow::Borrowed("Fetch iMessages from a conversation. Preferred: use 'name' to fetch by contact name (e.g. 'Jake'). Alternatives: 'participants' for phone numbers, 'chat_identifier' for group chats. Returns messages newest first with pagination."),
         schema,
     );
     tool_def.meta = Some(make_ui_meta());
@@ -111,6 +115,7 @@ fn make_fetch_tool_route() -> ToolRoute<IMessageServer> {
     ToolRoute::new_dyn(tool_def, |context| {
         Box::pin(async move {
             let args = context.arguments.unwrap_or_default();
+            let name = args.get("name").and_then(|v| v.as_str()).map(String::from);
             let participants: Vec<String> = args.get("participants")
                 .and_then(|v| v.as_array())
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
@@ -119,7 +124,7 @@ fn make_fetch_tool_route() -> ToolRoute<IMessageServer> {
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let before_timestamp = args.get("before_timestamp").and_then(|v| v.as_i64());
             let after_timestamp = args.get("after_timestamp").and_then(|v| v.as_i64());
-            let result = match messages::fetch(participants, chat_identifier, limit, before_timestamp, after_timestamp) {
+            let result = match messages::fetch(participants, chat_identifier, name, limit, before_timestamp, after_timestamp) {
                 Ok(v) => v.to_string(),
                 Err(e) => format!("{{\"error\": \"{}\"}}", e),
             };
@@ -150,7 +155,7 @@ fn make_send_tool_route() -> ToolRoute<IMessageServer> {
 
     let mut tool_def = Tool::new(
         "messages_send",
-        Cow::Borrowed("Send an iMessage or SMS. For 1-on-1: provide recipient (phone E.164 or email). For group chats: provide chat_identifier from messages_threads. Can send text, files/images, or both. Messages.app must be running."),
+        Cow::Borrowed("Send an iMessage or SMS. Provide recipient as phone (E.164) or email. Use contacts_search to find their number if needed. For group chats: use chat_identifier from messages_threads. Can send text, files/images, or both. Messages.app must be running."),
         schema,
     );
     tool_def.meta = Some(make_ui_meta());
@@ -174,9 +179,9 @@ fn make_send_tool_route() -> ToolRoute<IMessageServer> {
                 Ok(mut v) => {
                     // After successful send, fetch recent messages for the conversation
                     let recent = if let Some(ref recip) = recipient {
-                        messages::fetch(vec![recip.clone()], None, Some(10), None, None).ok()
+                        messages::fetch(vec![recip.clone()], None, None, Some(10), None, None).ok()
                     } else if let Some(ref cid) = chat_identifier {
-                        messages::fetch(vec![], Some(cid.clone()), Some(10), None, None).ok()
+                        messages::fetch(vec![], Some(cid.clone()), None, Some(10), None, None).ok()
                     } else {
                         None
                     };
@@ -201,7 +206,7 @@ fn make_search_tool_route() -> ToolRoute<IMessageServer> {
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Text to search for in messages"
+                "description": "Search query: matches contact names (returns their conversations) AND message text content. E.g. 'Jake' finds Jake's conversations + messages containing 'Jake'."
             },
             "limit": {
                 "type": "integer",
@@ -217,7 +222,7 @@ fn make_search_tool_route() -> ToolRoute<IMessageServer> {
 
     let mut tool_def = Tool::new(
         "messages_search",
-        Cow::Borrowed("Full-text search across all iMessages. Returns messages containing the query text, newest first, with cursor-based pagination."),
+        Cow::Borrowed("Search iMessages by contact name or message text. Returns two sections: 'conversations' (threads with contacts matching the query name, each with recent messages) and 'messages' (messages containing the query in the text body). Handles multiple conversations per person (1-on-1 and group chats)."),
         schema,
     );
     tool_def.meta = Some(make_ui_meta());
@@ -252,7 +257,7 @@ fn make_contacts_search_tool_route() -> ToolRoute<IMessageServer> {
 
     let mut tool_def = Tool::new(
         "contacts_search",
-        Cow::Borrowed("Search iCloud contacts by name, phone number, or email address. Returns a list of matching contacts with their phone numbers and emails."),
+        Cow::Borrowed("Look up contact info (phone numbers, emails) from iCloud Contacts. Use this to find someone's phone number or email. To read conversations, use messages_fetch (by name) or messages_search instead."),
         schema,
     );
     tool_def.meta = Some(make_ui_meta());
@@ -332,7 +337,13 @@ impl ServerHandler for IMessageServer {
                 .build(),
         )
         .with_instructions(
-            "iMessage MCP server -- read/send messages and search contacts via macOS APIs"
+            "iMessage MCP server -- read/send messages and search contacts via macOS APIs. \
+             Tool selection guide: \
+             'show my conversation with [name]' -> messages_fetch(name). \
+             'search for [term]' -> messages_search (finds matching conversations AND messages). \
+             'show recent chats' -> messages_threads. \
+             'find [name]'s phone/email' -> contacts_search. \
+             'text [name]' -> contacts_search to get number, then messages_send."
                 .to_string(),
         )
     }

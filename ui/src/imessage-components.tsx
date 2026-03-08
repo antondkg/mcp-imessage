@@ -786,20 +786,123 @@ export function SendResultView({ data }: { data: { success: boolean; message: st
 }
 
 // ---- Auto-render: Search Results View ----
-export function SearchResultsView({ messages, query }: { messages: MessageData[]; query: string }) {
+export function SearchResultsView({
+  messages,
+  conversations,
+  query,
+}: {
+  messages: MessageData[];
+  conversations?: ThreadData[];
+  query: string;
+}) {
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const dark = useIsDark();
+  const convos = arr(conversations) as ThreadData[];
+
+  // Show selected conversation
+  if (selectedIdx !== null && convos[selectedIdx]) {
+    const thread = convos[selectedIdx];
+    const msgs = arr(thread.recent_messages) as MessageData[];
+    const name = str(thread.display_name) || str(thread.chat_identifier);
+    return (
+      <div style={{ width: "100%" }}>
+        <div
+          onClick={() => setSelectedIdx(null)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "12px 16px",
+            cursor: "pointer",
+            borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
+            color: BLUE,
+            fontSize: 16,
+            fontWeight: 500,
+          }}
+        >
+          <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
+            <path d="M7 1L1.5 7L7 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <span>{name}</span>
+        </div>
+        <ConversationView messages={msgs} />
+      </div>
+    );
+  }
+
   return (
     <div style={{ width: "100%" }}>
-      {messages.map((m, i) => (
-        <SearchResult
-          key={m.id || i}
-          props={{
-            sender: str(m.sender_name) || str(m.sender),
-            text: str(m.text),
-            time: formatTimestamp(m.timestamp),
-            query: str(query),
+      {/* Conversations matching the name */}
+      {convos.length > 0 && (
+        <>
+          <div
+            style={{
+              padding: "10px 16px 6px",
+              fontSize: 13,
+              fontWeight: 600,
+              color: dark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
+            Conversations
+          </div>
+          {convos.map((t: any, i: number) => (
+            <ThreadRow
+              key={t.chat_id || i}
+              onClick={() => setSelectedIdx(i)}
+              props={{
+                name: str(t.display_name) || str(t.chat_identifier),
+                preview: (t.last_is_from_me ? "You: " : "") + str(t.last_message),
+                time: formatTimestamp(t.last_timestamp),
+                unread: false,
+              }}
+            />
+          ))}
+        </>
+      )}
+
+      {/* Messages matching the text */}
+      {messages.length > 0 && (
+        <>
+          <div
+            style={{
+              padding: "10px 16px 6px",
+              fontSize: 13,
+              fontWeight: 600,
+              color: dark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.4)",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
+            Messages
+          </div>
+          {messages.map((m, i) => (
+            <SearchResult
+              key={m.id || i}
+              props={{
+                sender: str(m.sender_name) || str(m.sender),
+                text: str(m.text),
+                time: formatTimestamp(m.timestamp),
+                query: str(query),
+              }}
+            />
+          ))}
+        </>
+      )}
+
+      {convos.length === 0 && messages.length === 0 && (
+        <div
+          style={{
+            padding: "40px 16px",
+            textAlign: "center",
+            fontSize: 15,
+            color: dark ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.35)",
           }}
-        />
-      ))}
+        >
+          No results for "{query}"
+        </div>
+      )}
     </div>
   );
 }

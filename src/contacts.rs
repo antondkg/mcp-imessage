@@ -282,6 +282,32 @@ fn ensure_cache() {
     c.source = CacheSource::None;
 }
 
+/// Public wrapper so other modules can trigger cache loading
+pub fn ensure_cache_public() {
+    ensure_cache();
+}
+
+/// Find all phone/email handles whose contact name matches the query (case-insensitive contains)
+pub fn find_handles_by_name(query: &str) -> Vec<String> {
+    ensure_cache();
+    let cache = get_cache();
+    let c = cache.lock().unwrap();
+    let query_lower = query.to_lowercase();
+
+    let mut handles = Vec::new();
+    for (phone, name) in &c.phone_to_name {
+        if name.to_lowercase().contains(&query_lower) {
+            handles.push(phone.clone());
+        }
+    }
+    for (email, name) in &c.email_to_name {
+        if name.to_lowercase().contains(&query_lower) {
+            handles.push(email.clone());
+        }
+    }
+    handles
+}
+
 /// Look up a contact name by phone number or email. Returns None if not found.
 pub fn resolve_name(handle: &str) -> Option<String> {
     ensure_cache();

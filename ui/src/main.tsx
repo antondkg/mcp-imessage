@@ -263,7 +263,7 @@ function McpAppView() {
   if (view.type === "contacts") return wrap(<ContactListView contacts={view.data.contacts} />);
   if (view.type === "contact_me") return wrap(<ContactMeView me={view.data.me} />);
   if (view.type === "sent") return wrap(<SendResultView data={view.data} />);
-  if (view.type === "search") return wrap(<SearchResultsView messages={view.data.messages} query={view.data.query} />);
+  if (view.type === "search") return wrap(<SearchResultsView messages={view.data.messages} conversations={view.data.conversations} query={view.data.query} />);
 
   return (
     <JSONUIProvider registry={registry} initialState={view.spec.state ?? {}}>
