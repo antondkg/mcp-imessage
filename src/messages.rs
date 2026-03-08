@@ -327,7 +327,17 @@ pub fn threads(limit: Option<u32>, offset: Option<u32>) -> Result<Value> {
     let limit = limit.unwrap_or(20).min(100);
     let offset = offset.unwrap_or(0);
 
-    let sql = "SELECT
+    let sql = "WITH latest_msg AS (
+        SELECT
+            cmj.chat_id,
+            MAX(m.rowid) as msg_id
+        FROM chat_message_join cmj
+        JOIN message m ON m.rowid = cmj.message_id
+        WHERE m.text IS NOT NULL AND m.text != ''
+           OR m.attributedBody IS NOT NULL
+        GROUP BY cmj.chat_id
+    )
+    SELECT
         c.rowid as chat_id,
         c.chat_identifier,
         c.display_name,
@@ -336,20 +346,12 @@ pub fn threads(limit: Option<u32>, offset: Option<u32>) -> Result<Value> {
         m.date as last_date,
         m.is_from_me,
         GROUP_CONCAT(DISTINCT h.id) as participants
-    FROM chat c
-    JOIN chat_message_join cmj ON cmj.chat_id = c.rowid
-    JOIN message m ON m.rowid = cmj.message_id
+    FROM latest_msg lm
+    JOIN chat c ON c.rowid = lm.chat_id
+    JOIN message m ON m.rowid = lm.msg_id
     LEFT JOIN chat_handle_join chj ON chj.chat_id = c.rowid
     LEFT JOIN handle h ON h.rowid = chj.handle_id
-    WHERE m.date = (
-        SELECT MAX(m2.date)
-        FROM chat_message_join cmj2
-        JOIN message m2 ON m2.rowid = cmj2.message_id
-        WHERE cmj2.chat_id = c.rowid
-          AND (m2.text IS NOT NULL OR m2.attributedBody IS NOT NULL)
-    )
-    AND (m.text IS NOT NULL OR m.attributedBody IS NOT NULL)
-    GROUP BY c.chat_identifier
+    GROUP BY c.rowid
     ORDER BY m.date DESC
     LIMIT ?1
     OFFSET ?2";

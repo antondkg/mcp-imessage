@@ -96,7 +96,7 @@ fn build_send_commands(target_var: &str, text: Option<&str>, file_path: Option<&
     let mut commands = Vec::new();
     if let Some(path) = file_path {
         let escaped_path = path.replace('"', "\\\"");
-        commands.push(format!("set theFile to POSIX file \"{}\"", escaped_path));
+        commands.push(format!("set theFile to \"{}\" as POSIX file as alias", escaped_path));
         commands.push(format!("send theFile to {}", target_var));
     }
     if let Some(t) = text {

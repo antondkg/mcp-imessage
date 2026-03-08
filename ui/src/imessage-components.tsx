@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
 
 // ---- Color system ----
 const BLUE = "#007AFF";
 const GRAY_BUBBLE = "#E9E9EB";
 const BLUE_DARK = "#0A84FF";
-const BUBBLE_DARK = "#26252A";
+const BUBBLE_DARK = "#3A3A3C";
 
 // Deterministic avatar color from name
 const AVATAR_COLORS = [
@@ -33,15 +33,53 @@ function avatarGradient(name: string): [string, string] {
   return AVATAR_COLORS[idx] as [string, string];
 }
 
-function useIsDark() {
-  const [dark] = useState(() => {
-    if (typeof window === "undefined") return false;
-    return (
-      document.documentElement.getAttribute("data-theme") === "dark" ||
-      window.matchMedia("(prefers-color-scheme: dark)").matches
-    );
+// Reactive dark mode detection that updates when data-theme changes
+let _darkListeners = new Set<() => void>();
+let _isDark = false;
+
+function _computeIsDark(): boolean {
+  if (typeof window === "undefined") return false;
+  const theme = document.documentElement.getAttribute("data-theme");
+  if (theme === "dark") return true;
+  if (theme === "light") return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+if (typeof window !== "undefined") {
+  _isDark = _computeIsDark();
+
+  // Watch for data-theme attribute changes on <html>
+  const observer = new MutationObserver(() => {
+    const next = _computeIsDark();
+    if (next !== _isDark) {
+      _isDark = next;
+      _darkListeners.forEach((fn) => fn());
+    }
   });
-  return dark;
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme", "style"],
+  });
+
+  // Also watch prefers-color-scheme
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    const next = _computeIsDark();
+    if (next !== _isDark) {
+      _isDark = next;
+      _darkListeners.forEach((fn) => fn());
+    }
+  });
+}
+
+function useIsDark(): boolean {
+  return useSyncExternalStore(
+    (cb) => {
+      _darkListeners.add(cb);
+      return () => _darkListeners.delete(cb);
+    },
+    () => _isDark,
+    () => false,
+  );
 }
 
 function AvatarCircle({
@@ -105,7 +143,7 @@ export function MessageBubble({ props }: { props: Record<string, unknown> }) {
         alignItems: "flex-end",
         gap: 6,
         marginBottom: isGroupEnd ? 8 : 2,
-        maxWidth: "100%",
+        width: "100%",
       }}
     >
       {!isMe && (
@@ -113,7 +151,7 @@ export function MessageBubble({ props }: { props: Record<string, unknown> }) {
           {showAvatar && <AvatarCircle name={sender} size={28} />}
         </div>
       )}
-      <div style={{ maxWidth: "72%", minWidth: 40 }}>
+      <div style={{ maxWidth: "85%" }}>
         <div
           style={{
             backgroundColor: bubbleBg,
@@ -125,6 +163,8 @@ export function MessageBubble({ props }: { props: Record<string, unknown> }) {
             fontSize: 15,
             lineHeight: 1.38,
             wordBreak: "break-word",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "break-word",
           }}
         >
           {text}
