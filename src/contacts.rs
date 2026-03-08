@@ -210,7 +210,7 @@ end tell"#,
 /// Return the user's own contact card
 pub fn me() -> Result<Value> {
     let script = r#"tell application "Contacts"
-    set mePerson to me
+    set mePerson to my card
     set pName to name of mePerson
 
     set phoneList to ""
