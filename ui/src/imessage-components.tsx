@@ -551,89 +551,6 @@ interface MessageData {
   sender: string;
   sender_name?: string;
   chat_identifier: string;
-  delivery_status?: string;
-  is_optimistic?: boolean;
-}
-
-function mergeMessages(
-  messages: MessageData[],
-  optimistic?: MessageData | null,
-): MessageData[] {
-  if (!optimistic) return messages;
-  const existingIndex = messages.findIndex(
-    (message) => isSameRenderedMessage(message, optimistic),
-  );
-  if (existingIndex === -1) {
-    return [optimistic, ...messages];
-  }
-
-  const merged = [...messages];
-  merged[existingIndex] = reconcileRenderedMessage(
-    messages[existingIndex],
-    optimistic,
-  );
-  return merged;
-}
-
-function normalizeMessageText(value: string): string {
-  return value.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-function areTextsEffectivelySame(a: string, b: string): boolean {
-  const left = normalizeMessageText(a);
-  const right = normalizeMessageText(b);
-
-  if (!left || !right) return left === right;
-  if (left === right) return true;
-
-  const longer = left.length >= right.length ? left : right;
-  const shorter = left.length >= right.length ? right : left;
-  const lengthDiff = longer.length - shorter.length;
-
-  if (lengthDiff <= 4 && (longer.startsWith(shorter) || shorter.startsWith(longer))) {
-    return true;
-  }
-
-  if (longer.length > 24 && shorter.length > 24) {
-    const sharedPrefixLength = [...longer].findIndex((char, index) => char !== shorter[index]);
-    const prefix = sharedPrefixLength === -1 ? shorter.length : sharedPrefixLength;
-    return prefix >= shorter.length - 4;
-  }
-
-  return false;
-}
-
-function isSameRenderedMessage(
-  message: MessageData,
-  optimistic: MessageData,
-): boolean {
-  return (
-    message.id === optimistic.id ||
-    (
-      Math.abs(message.timestamp - optimistic.timestamp) <= 120 &&
-      message.is_from_me === optimistic.is_from_me &&
-      str(message.chat_identifier) === str(optimistic.chat_identifier) &&
-      areTextsEffectivelySame(str(message.text), str(optimistic.text))
-    )
-  );
-}
-
-function reconcileRenderedMessage(
-  message: MessageData,
-  optimistic: MessageData,
-): MessageData {
-  const messageText = str(message.text);
-  const optimisticText = str(optimistic.text);
-  const preferOptimisticText =
-    optimisticText.length > messageText.length &&
-    areTextsEffectivelySame(messageText, optimisticText);
-
-  return {
-    ...message,
-    text: preferOptimisticText ? optimisticText : messageText,
-    delivery_status: optimistic.delivery_status ?? message.delivery_status,
-    is_optimistic: false,
-  };
 }
 
 function ConversationHeader({
@@ -713,7 +630,7 @@ function MessageComposer({
 }: {
   text: string;
   onTextChange: (value: string) => void;
-  onSend: () => void;
+  onSend: (valueOverride?: string) => void;
   isSending: boolean;
   error?: string | null;
   placeholder?: string;
@@ -761,6 +678,18 @@ function MessageComposer({
           ref={textareaRef}
           value={text}
           onChange={(event) => onTextChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              if (!isSending) {
+                const value = textareaRef.current?.value ?? event.currentTarget.value;
+                onTextChange(value);
+                window.setTimeout(() => {
+                  onSend(textareaRef.current?.value ?? value);
+                }, 0);
+              }
+            }
+          }}
           placeholder={placeholder ?? "iMessage"}
           rows={1}
           style={{
@@ -782,7 +711,7 @@ function MessageComposer({
         />
         <button
           type="button"
-          onClick={onSend}
+          onClick={() => onSend()}
           disabled={isSending}
           style={{
             border: "none",
@@ -856,12 +785,12 @@ function ConversationScreen({
   title,
   messages,
   onSendDraft,
+  onRefreshConversation,
   onBack,
   recipient,
   chat_identifier,
   initialText = "",
   filePath,
-  optimisticMessage,
 }: {
   title: string;
   messages: MessageData[];
@@ -871,26 +800,64 @@ function ConversationScreen({
     text?: string;
     file_path?: string;
   }) => Promise<void>;
+  onRefreshConversation?: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+  }) => Promise<MessageData[]>;
   onBack?: () => void;
   recipient?: string;
   chat_identifier?: string;
   initialText?: string;
   filePath?: string;
-  optimisticMessage?: MessageData;
 }) {
   const [text, setText] = useState(initialText);
   const [isSending, setIsSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
-  const mergedMessages = mergeMessages(messages, optimisticMessage);
+  const [liveMessages, setLiveMessages] = useState(messages);
   const target = recipient || chat_identifier;
-  const resolvedTitle = preferredConversationTitle(title, mergedMessages);
+  const resolvedTitle = preferredConversationTitle(title, liveMessages);
 
   useEffect(() => {
     setText(initialText);
   }, [initialText, title]);
 
-  async function handleSend() {
-    const nextText = text.trim();
+  useEffect(() => {
+    setLiveMessages(messages);
+  }, [messages]);
+
+  useEffect(() => {
+    if (!onRefreshConversation || !target) return;
+
+    let cancelled = false;
+
+    const refresh = async () => {
+      if (document.visibilityState === "hidden") return;
+      try {
+        const fetchedMessages = await onRefreshConversation({
+          recipient,
+          chat_identifier,
+        });
+        if (!cancelled && fetchedMessages.length > 0) {
+          setLiveMessages(fetchedMessages);
+        }
+      } catch {
+        // Keep the last rendered state if polling fails.
+      }
+    };
+
+    void refresh();
+    const intervalId = window.setInterval(() => {
+      void refresh();
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [onRefreshConversation, recipient, chat_identifier, target]);
+
+  async function handleSend(valueOverride?: string) {
+    const nextText = (valueOverride ?? text).trim();
     if (!nextText && !filePath) {
       setSendError("Add a message or attachment before sending.");
       return;
@@ -914,6 +881,20 @@ function ConversationScreen({
         file_path: filePath || undefined,
       });
       setText("");
+      if (onRefreshConversation) {
+        const burstDelays = [300, 900, 1800];
+        burstDelays.forEach((delay) => {
+          window.setTimeout(() => {
+            void onRefreshConversation({ recipient, chat_identifier })
+              .then((fetchedMessages) => {
+                if (fetchedMessages.length > 0) {
+                  setLiveMessages(fetchedMessages);
+                }
+              })
+              .catch(() => {});
+          }, delay);
+        });
+      }
     } catch (error) {
       setSendError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -924,11 +905,11 @@ function ConversationScreen({
   return (
     <div style={{ width: "100%" }}>
       <ConversationHeader title={resolvedTitle} onBack={onBack} />
-      <ConversationView messages={mergedMessages} />
+      <ConversationView messages={liveMessages} />
       <MessageComposer
         text={text}
         onTextChange={setText}
-        onSend={() => void handleSend()}
+        onSend={(valueOverride) => void handleSend(valueOverride)}
         isSending={isSending}
         error={sendError}
         filePath={filePath}
@@ -940,6 +921,7 @@ function ConversationScreen({
 export function ThreadListView({
   threads,
   onSendDraft,
+  onRefreshConversation,
 }: {
   threads: ThreadData[];
   onSendDraft?: (args: {
@@ -948,6 +930,10 @@ export function ThreadListView({
     text?: string;
     file_path?: string;
   }) => Promise<void>;
+  onRefreshConversation?: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+  }) => Promise<MessageData[]>;
 }) {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
 
@@ -962,6 +948,7 @@ export function ThreadListView({
         title={name}
         messages={messages}
         onSendDraft={onSendDraft}
+        onRefreshConversation={onRefreshConversation}
         onBack={() => setSelectedIdx(null)}
         recipient={singleHandle || undefined}
         chat_identifier={singleHandle ? undefined : str(thread.chat_identifier) || undefined}
@@ -996,11 +983,21 @@ export function ConversationView({
   autoScroll?: boolean;
 }) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const previousLengthRef = useRef(0);
   // Messages come newest-first, reverse for chronological display
   const chronological = [...messages].reverse();
 
   useEffect(() => {
-    if (autoScroll) {
+    const shouldScroll =
+      autoScroll &&
+      (
+        previousLengthRef.current === 0 ||
+        messages.length > previousLengthRef.current
+      );
+
+    previousLengthRef.current = messages.length;
+
+    if (shouldScroll) {
       bottomRef.current?.scrollIntoView({ behavior: "instant" });
     }
   }, [autoScroll, messages]);
@@ -1150,6 +1147,7 @@ export function ContactMeView({ me }: { me: ContactData }) {
 export function SendResultView({
   data,
   onSendDraft,
+  onRefreshConversation,
 }: {
   data: {
     success: boolean;
@@ -1157,7 +1155,6 @@ export function SendResultView({
     recent_messages?: MessageData[];
     recipient?: string;
     chat_identifier?: string;
-    optimistic_message?: MessageData;
   };
   onSendDraft: (args: {
     recipient?: string;
@@ -1165,6 +1162,10 @@ export function SendResultView({
     text?: string;
     file_path?: string;
   }) => Promise<void>;
+  onRefreshConversation?: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+  }) => Promise<MessageData[]>;
 }) {
   const messages = arr(data.recent_messages) as MessageData[];
   const target = resolveConversationTarget(messages);
@@ -1175,9 +1176,9 @@ export function SendResultView({
       title={title}
       messages={messages}
       onSendDraft={onSendDraft}
+      onRefreshConversation={onRefreshConversation}
       recipient={data.recipient || target.recipient}
       chat_identifier={data.chat_identifier || target.chat_identifier}
-      optimisticMessage={data.optimistic_message}
     />
   );
 }
@@ -1187,13 +1188,13 @@ interface DraftData {
   chat_identifier?: string;
   text?: string;
   file_path?: string;
-  optimistic_message?: MessageData;
 }
 
 export function DraftApprovalView({
   draft,
   recentMessages,
   onSendDraft,
+  onRefreshConversation,
 }: {
   draft: DraftData;
   recentMessages: MessageData[];
@@ -1203,6 +1204,10 @@ export function DraftApprovalView({
     text?: string;
     file_path?: string;
   }) => Promise<void>;
+  onRefreshConversation?: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+  }) => Promise<MessageData[]>;
 }) {
   const title = str(draft.recipient) || str(draft.chat_identifier) || resolveConversationTitle(recentMessages);
   const filePath = str(draft.file_path);
@@ -1212,6 +1217,7 @@ export function DraftApprovalView({
       title={title}
       messages={recentMessages}
       onSendDraft={onSendDraft}
+      onRefreshConversation={onRefreshConversation}
       recipient={draft.recipient}
       chat_identifier={draft.chat_identifier}
       initialText={str(draft.text)}
@@ -1223,6 +1229,7 @@ export function DraftApprovalView({
 export function MessagesConversationView({
   messages,
   onSendDraft,
+  onRefreshConversation,
 }: {
   messages: MessageData[];
   onSendDraft?: (args: {
@@ -1231,6 +1238,10 @@ export function MessagesConversationView({
     text?: string;
     file_path?: string;
   }) => Promise<void>;
+  onRefreshConversation?: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+  }) => Promise<MessageData[]>;
 }) {
   const target = resolveConversationTarget(messages);
   return (
@@ -1238,6 +1249,7 @@ export function MessagesConversationView({
       title={resolveConversationTitle(messages)}
       messages={messages}
       onSendDraft={onSendDraft}
+      onRefreshConversation={onRefreshConversation}
       recipient={target.recipient}
       chat_identifier={target.chat_identifier}
     />
@@ -1250,6 +1262,7 @@ export function SearchResultsView({
   conversations,
   query,
   onSendDraft,
+  onRefreshConversation,
 }: {
   messages: MessageData[];
   conversations?: ThreadData[];
@@ -1260,6 +1273,10 @@ export function SearchResultsView({
     text?: string;
     file_path?: string;
   }) => Promise<void>;
+  onRefreshConversation?: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+  }) => Promise<MessageData[]>;
 }) {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const dark = useIsDark();
@@ -1277,6 +1294,7 @@ export function SearchResultsView({
         title={name}
         messages={msgs}
         onSendDraft={onSendDraft}
+        onRefreshConversation={onRefreshConversation}
         onBack={() => setSelectedIdx(null)}
         recipient={singleHandle || undefined}
         chat_identifier={singleHandle ? undefined : str(thread.chat_identifier) || undefined}

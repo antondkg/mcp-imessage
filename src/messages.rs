@@ -26,8 +26,11 @@ fn open_db() -> Result<Connection> {
 }
 
 /// Extract plain text from NSAttributedString binary blob (attributedBody column).
-/// Format: ... NSString \x01\x94\x84\x01 + <length> <text> ...
-/// Length is single byte if < 0x80, otherwise multi-byte (low nibble = number of length bytes, little-endian).
+/// The payload typically stores an NSString marker followed by '+' and then a length header.
+/// In practice we see:
+/// - single-byte lengths for short messages
+/// - 0x81 followed by a 2-byte little-endian length for longer messages
+/// - other high-bit values where the low nibble encodes the count of subsequent length bytes
 fn extract_text_from_attributed_body(data: &[u8]) -> Option<String> {
     let marker = b"NSString";
     let idx = data.windows(marker.len()).position(|w| w == marker)?;
@@ -46,6 +49,12 @@ fn extract_text_from_attributed_body(data: &[u8]) -> Option<String> {
     if length_byte < 0x80 {
         length = length_byte as usize;
         text_start = 1;
+    } else if length_byte == 0x81 {
+        if after_plus.len() < 3 {
+            return None;
+        }
+        length = u16::from_le_bytes([after_plus[1], after_plus[2]]) as usize;
+        text_start = 3;
     } else {
         // Multi-byte length: low nibble = number of bytes for length, little-endian
         let num_bytes = (length_byte & 0x0f) as usize;
@@ -79,17 +88,23 @@ fn extract_text_from_attributed_body(data: &[u8]) -> Option<String> {
 }
 
 fn resolve_text(text: Option<String>, attributed_body: Option<Vec<u8>>) -> Option<String> {
-    // Prefer text column if it's non-empty
-    if let Some(ref t) = text {
-        if !t.is_empty() {
-            return Some(t.clone());
+    let text_value = text.filter(|value| !value.is_empty());
+    let attributed_value = attributed_body
+        .as_deref()
+        .and_then(extract_text_from_attributed_body);
+
+    match (text_value, attributed_value) {
+        (Some(text), Some(attributed)) => {
+            if attributed.len() > text.len() {
+                Some(attributed)
+            } else {
+                Some(text)
+            }
         }
+        (Some(text), None) => Some(text),
+        (None, Some(attributed)) => Some(attributed),
+        (None, None) => None,
     }
-    // Fall back to extracting from attributedBody
-    if let Some(ref body) = attributed_body {
-        return extract_text_from_attributed_body(body);
-    }
-    None
 }
 
 fn row_to_message(

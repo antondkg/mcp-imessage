@@ -125,8 +125,8 @@ function tryParseAny(data: unknown): ViewData | null {
   if (Array.isArray(obj.threads)) {
     return { type: "threads", data: obj };
   }
-  // Send result with recent messages
-  if (obj.success !== undefined && obj.recent_messages) {
+  // Send result
+  if (obj.success !== undefined) {
     return { type: "sent", data: obj };
   }
   // Draft result with approval UI
@@ -158,6 +158,25 @@ function tryParseAny(data: unknown): ViewData | null {
   }
 
   return null;
+}
+
+function parseToolJson(data: unknown): Record<string, unknown> | null {
+  if (!data || typeof data !== "object") return null;
+  const obj = data as Record<string, unknown>;
+
+  if (Array.isArray(obj.content)) {
+    const textItem = obj.content.find((c: any) => c?.type === "text" && typeof c?.text === "string");
+    if (textItem) {
+      try {
+        const parsed = JSON.parse((textItem as any).text);
+        return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  return obj;
 }
 
 function McpAppView() {
@@ -265,9 +284,38 @@ function McpAppView() {
     });
     const parsed = tryParseAny(result);
     if (!parsed) {
+      const refreshedMessages = await handleRefreshConversation({
+        recipient: args.recipient,
+        chat_identifier: args.chat_identifier,
+      });
+      if (refreshedMessages.length > 0) {
+        setView({ type: "messages", data: { messages: refreshedMessages } });
+        return;
+      }
       throw new Error("Send completed but the UI could not parse the result.");
     }
     setView(parsed);
+  }
+
+  async function handleRefreshConversation(args: {
+    recipient?: string;
+    chat_identifier?: string;
+  }) {
+    const app = appRef.current;
+    if (!app) {
+      throw new Error("MCP app is not connected yet.");
+    }
+
+    const result = await app.callServerTool({
+      name: "messages_fetch",
+      arguments: args.chat_identifier
+        ? { chat_identifier: args.chat_identifier, limit: 20 }
+        : { participants: args.recipient ? [args.recipient] : [], limit: 20 },
+    });
+
+    const parsed = parseToolJson(result);
+    const messages = parsed?.messages;
+    return Array.isArray(messages) ? messages : [];
   }
 
   if (error) {
@@ -295,6 +343,7 @@ function McpAppView() {
       <ThreadListView
         threads={view.data.threads}
         onSendDraft={handleDraftSend}
+        onRefreshConversation={handleRefreshConversation}
       />,
     );
   }
@@ -303,6 +352,7 @@ function McpAppView() {
       <MessagesConversationView
         messages={view.data.messages}
         onSendDraft={handleDraftSend}
+        onRefreshConversation={handleRefreshConversation}
       />,
     );
   }
@@ -314,6 +364,7 @@ function McpAppView() {
         draft={view.data.draft}
         recentMessages={view.data.recent_messages}
         onSendDraft={handleDraftSend}
+        onRefreshConversation={handleRefreshConversation}
       />,
     );
   }
@@ -322,6 +373,7 @@ function McpAppView() {
       <SendResultView
         data={view.data}
         onSendDraft={handleDraftSend}
+        onRefreshConversation={handleRefreshConversation}
       />,
     );
   }
@@ -332,6 +384,7 @@ function McpAppView() {
         conversations={view.data.conversations}
         query={view.data.query}
         onSendDraft={handleDraftSend}
+        onRefreshConversation={handleRefreshConversation}
       />,
     );
   }

@@ -4,6 +4,7 @@ mod send;
 
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use rmcp::{
@@ -19,6 +20,7 @@ use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
 };
 use serde_json::json;
+use tokio::time::sleep;
 
 /// Embedded UI HTML (built from ui/dist/index.html)
 const UI_HTML: &str = include_str!("../ui/dist/index.html");
@@ -215,26 +217,34 @@ fn make_send_tool_route() -> ToolRoute<IMessageServer> {
 
             let result = match send_result {
                 Ok(mut v) => {
-                    // After successful send, fetch recent messages for the conversation
-                    let recent = if let Some(ref recip) = recipient {
-                        messages::fetch(vec![recip.clone()], None, None, Some(10), None, None).ok()
-                    } else if let Some(ref cid) = chat_identifier {
-                        messages::fetch(vec![], Some(cid.clone()), None, Some(10), None, None).ok()
-                    } else {
-                        None
-                    };
-                    if let Some(msgs) = recent {
-                        if let Some(obj) = v.as_object_mut() {
-                            let optimistic = send::optimistic_message(
-                                recipient.as_deref(),
-                                chat_identifier.as_deref(),
-                                text.as_deref(),
-                                normalized_file_path.as_deref(),
-                                "sent",
-                            );
-                            obj.insert("recent_messages".to_string(), msgs["messages"].clone());
-                            obj.insert("optimistic_message".to_string(), optimistic);
+                    // Wait briefly and fetch from chat.db so the database remains the single source of truth.
+                    let mut recent = None;
+                    for delay_ms in [250_u64, 600, 1200] {
+                        sleep(Duration::from_millis(delay_ms)).await;
+                        recent = if let Some(ref recip) = recipient {
+                            messages::fetch(vec![recip.clone()], None, None, Some(10), None, None)
+                                .ok()
+                        } else if let Some(ref cid) = chat_identifier {
+                            messages::fetch(vec![], Some(cid.clone()), None, Some(10), None, None)
+                                .ok()
+                        } else {
+                            None
+                        };
+
+                        if recent
+                            .as_ref()
+                            .and_then(|value| value["messages"].as_array())
+                            .is_some_and(|messages| !messages.is_empty())
+                        {
+                            break;
                         }
+                    }
+
+                    if let Some(obj) = v.as_object_mut() {
+                        let recent_messages = recent
+                            .and_then(|msgs| msgs["messages"].as_array().cloned())
+                            .unwrap_or_default();
+                        obj.insert("recent_messages".to_string(), json!(recent_messages));
                     }
                     v.to_string()
                 }
