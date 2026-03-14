@@ -606,14 +606,22 @@ export function ThreadListView({ threads }: { threads: ThreadData[] }) {
 }
 
 // ---- Auto-render: Conversation View ----
-export function ConversationView({ messages }: { messages: MessageData[] }) {
+export function ConversationView({
+  messages,
+  autoScroll = true,
+}: {
+  messages: MessageData[];
+  autoScroll?: boolean;
+}) {
   const bottomRef = useRef<HTMLDivElement>(null);
   // Messages come newest-first, reverse for chronological display
   const chronological = [...messages].reverse();
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "instant" });
-  }, [messages]);
+    if (autoScroll) {
+      bottomRef.current?.scrollIntoView({ behavior: "instant" });
+    }
+  }, [autoScroll, messages]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2, padding: "8px 12px", width: "100%", boxSizing: "border-box" }}>

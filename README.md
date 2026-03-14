@@ -11,6 +11,20 @@ A public MCP server for macOS that can:
 
 It is built in Rust for the server layer, with a small React/Vite app bundled into the binary for the UI.
 
+## Screenshots
+
+### Thread list
+
+![Thread list UI](assets/screenshots/threads.png)
+
+### Conversation view
+
+![Conversation view UI](assets/screenshots/conversation.png)
+
+### Search and contact views
+
+![Search and contact UI](assets/screenshots/search.png)
+
 ## Why this repo exists
 
 Most iMessage MCP experiments stop at raw JSON. This one is meant to be usable:
@@ -35,6 +49,14 @@ Most iMessage MCP experiments stop at raw JSON. This one is meant to be usable:
 - Messages.app signed in to iMessage
 - permission to access Messages data, Contacts, and Automation access for Messages.app when sending
 
+## Security notes
+
+- Message database access is opened in read-only SQLite mode.
+- Contacts database access is also opened in read-only SQLite mode.
+- `messages_send` is disabled by default and is only exposed when `MCP_IMESSAGE_ENABLE_SEND=1` is set.
+- AppleScript send and search actions pass user input through argv instead of interpolating raw values into script source.
+- The UI build runs local `npm ci` during Cargo builds, so treat dependency updates as part of your trusted supply chain review.
+
 ## Quick start
 
 ```bash
@@ -56,6 +78,8 @@ Then point your MCP client at the compiled binary:
   }
 }
 ```
+
+To enable sending support, set `MCP_IMESSAGE_ENABLE_SEND=1` in the environment for your MCP host before launching the server.
 
 ## Tools
 

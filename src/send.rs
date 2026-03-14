@@ -1,6 +1,16 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::process::Command;
+
+const ENABLE_SEND_ENV: &str = "MCP_IMESSAGE_ENABLE_SEND";
+
+pub fn sending_enabled() -> bool {
+    matches!(
+        std::env::var(ENABLE_SEND_ENV).ok().as_deref(),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
+}
 
 /// Send an iMessage to a recipient (phone number in E.164 format or email)
 /// Supports text, file attachments, or both.
@@ -10,47 +20,45 @@ pub fn send_message(
     text: Option<&str>,
     file_path: Option<&str>,
 ) -> Result<Value> {
+    if !sending_enabled() {
+        return Err(anyhow::anyhow!(
+            "Sending is disabled by default. Set {}=1 to enable messages_send.",
+            ENABLE_SEND_ENV
+        ));
+    }
+
+    if recipient.is_some() && chat_identifier.is_some() {
+        return Err(anyhow::anyhow!(
+            "Provide either recipient or chat_identifier, not both"
+        ));
+    }
+
     if text.is_none() && file_path.is_none() {
         return Err(anyhow::anyhow!(
             "Provide either text or file_path (or both)"
         ));
     }
 
-    // Validate file exists if provided
-    if let Some(path) = file_path {
-        if !std::path::Path::new(path).exists() {
-            return Err(anyhow::anyhow!("File not found: {}", path));
-        }
-    }
+    let file_path = normalize_file_path(file_path)?;
 
     // Group chat: send to chat by GUID
     if let Some(chat_id) = chat_identifier {
-        return send_to_group(chat_id, text, file_path);
+        return send_to_group(chat_id, text, file_path.as_deref());
     }
 
     let recipient =
         recipient.ok_or_else(|| anyhow::anyhow!("Provide either recipient or chat_identifier"))?;
-    let escaped_recipient = recipient.replace('"', "\\\"");
+    let script = buddy_send_script("iMessage");
 
-    // Build the send commands
-    let send_commands = build_send_commands("targetBuddy", text, file_path);
-
-    let script = format!(
-        r#"tell application "Messages"
-    set targetService to 1st service whose service type = iMessage
-    set targetBuddy to buddy "{recipient}" of targetService
-    {commands}
-    return "sent"
-end tell"#,
-        recipient = escaped_recipient,
-        commands = send_commands
-    );
-
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .context("Failed to run osascript")?;
+    let output = run_osascript(
+        &script,
+        &[
+            recipient,
+            text.unwrap_or_default(),
+            file_path.as_deref().unwrap_or(""),
+        ],
+    )
+    .context("Failed to run osascript")?;
 
     if output.status.success() {
         Ok(json!({
@@ -64,23 +72,16 @@ end tell"#,
 
         // Try SMS fallback if iMessage buddy not found
         if stderr.contains("buddy") || stderr.contains("service") {
-            let sms_commands = build_send_commands("targetBuddy", text, file_path);
-            let sms_script = format!(
-                r#"tell application "Messages"
-    set targetService to 1st service whose service type = SMS
-    set targetBuddy to buddy "{recipient}" of targetService
-    {commands}
-    return "sent"
-end tell"#,
-                recipient = escaped_recipient,
-                commands = sms_commands
-            );
-
-            let sms_output = Command::new("osascript")
-                .arg("-e")
-                .arg(&sms_script)
-                .output()
-                .context("Failed to run osascript for SMS fallback")?;
+            let sms_script = buddy_send_script("SMS");
+            let sms_output = run_osascript(
+                &sms_script,
+                &[
+                    recipient,
+                    text.unwrap_or_default(),
+                    file_path.as_deref().unwrap_or(""),
+                ],
+            )
+            .context("Failed to run osascript for SMS fallback")?;
 
             if sms_output.status.success() {
                 return Ok(json!({
@@ -99,44 +100,89 @@ end tell"#,
     }
 }
 
-/// Build AppleScript send commands for text and/or file
-fn build_send_commands(target_var: &str, text: Option<&str>, file_path: Option<&str>) -> String {
-    let mut commands = Vec::new();
-    if let Some(path) = file_path {
-        let escaped_path = path.replace('"', "\\\"");
-        commands.push(format!(
-            "set theFile to \"{}\" as POSIX file as alias",
-            escaped_path
+fn normalize_file_path(file_path: Option<&str>) -> Result<Option<String>> {
+    let Some(path) = file_path else {
+        return Ok(None);
+    };
+
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err(anyhow::anyhow!(
+            "file_path must be an absolute path to a file"
         ));
-        commands.push(format!("send theFile to {}", target_var));
     }
-    if let Some(t) = text {
-        let escaped = t.replace('\\', "\\\\").replace('"', "\\\"");
-        commands.push(format!("send \"{}\" to {}", escaped, target_var));
+
+    let canonical = path
+        .canonicalize()
+        .with_context(|| format!("File not found: {}", path.display()))?;
+
+    if !canonical.is_file() {
+        return Err(anyhow::anyhow!(
+            "file_path must point to a regular file: {}",
+            canonical.display()
+        ));
     }
-    commands.join("\n    ")
+
+    Ok(Some(canonical.to_string_lossy().into_owned()))
+}
+
+fn run_osascript(script: &str, args: &[&str]) -> Result<std::process::Output> {
+    let mut command = Command::new("osascript");
+    command.arg("-e").arg(script).arg("--");
+    for arg in args {
+        command.arg(arg);
+    }
+    command.output().context("Failed to execute osascript")
+}
+
+fn buddy_send_script(service_type: &str) -> String {
+    format!(
+        r#"on run argv
+    set recipient to item 1 of argv
+    set messageText to item 2 of argv
+    set attachmentPath to item 3 of argv
+
+    tell application "Messages"
+        set targetService to 1st service whose service type = {service_type}
+        set targetBuddy to buddy recipient of targetService
+        if attachmentPath is not "" then
+            set theFile to POSIX file attachmentPath as alias
+            send theFile to targetBuddy
+        end if
+        if messageText is not "" then
+            send messageText to targetBuddy
+        end if
+        return "sent"
+    end tell
+end run"#
+    )
 }
 
 /// Send a message to a group chat by its chat identifier (GUID)
 fn send_to_group(chat_id: &str, text: Option<&str>, file_path: Option<&str>) -> Result<Value> {
-    let escaped_chat_id = chat_id.replace('"', "\\\"");
-    let send_commands = build_send_commands("targetChat", text, file_path);
+    let direct_script = r#"on run argv
+    set chatId to item 1 of argv
+    set messageText to item 2 of argv
+    set attachmentPath to item 3 of argv
 
-    let script = format!(
-        r#"tell application "Messages"
-    set targetChat to a reference to chat id "iMessage;+;{chat_id}"
-    {commands}
-    return "sent"
-end tell"#,
-        chat_id = escaped_chat_id,
-        commands = send_commands
-    );
+    tell application "Messages"
+        set targetChat to a reference to chat id ("iMessage;+;" & chatId)
+        if attachmentPath is not "" then
+            set theFile to POSIX file attachmentPath as alias
+            send theFile to targetChat
+        end if
+        if messageText is not "" then
+            send messageText to targetChat
+        end if
+        return "sent"
+    end tell
+end run"#;
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(&script)
-        .output()
-        .context("Failed to run osascript for group chat")?;
+    let output = run_osascript(
+        direct_script,
+        &[chat_id, text.unwrap_or_default(), file_path.unwrap_or("")],
+    )
+    .context("Failed to run osascript for group chat")?;
 
     if output.status.success() {
         return Ok(json!({
@@ -149,27 +195,34 @@ end tell"#,
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
     // Try finding by iterating chats
-    let fallback_commands = build_send_commands("c", text, file_path);
-    let fallback_script = format!(
-        r#"tell application "Messages"
-    set allChats to every chat
-    repeat with c in allChats
-        if id of c contains "{chat_id}" then
-            {commands}
-            return "sent"
-        end if
-    end repeat
-    return "chat not found"
-end tell"#,
-        chat_id = escaped_chat_id,
-        commands = fallback_commands
-    );
+    let fallback_script = r#"on run argv
+    set chatId to item 1 of argv
+    set messageText to item 2 of argv
+    set attachmentPath to item 3 of argv
 
-    let fallback_output = Command::new("osascript")
-        .arg("-e")
-        .arg(&fallback_script)
-        .output()
-        .context("Failed to run osascript fallback for group chat")?;
+    tell application "Messages"
+        set allChats to every chat
+        repeat with c in allChats
+            if id of c contains chatId then
+                if attachmentPath is not "" then
+                    set theFile to POSIX file attachmentPath as alias
+                    send theFile to c
+                end if
+                if messageText is not "" then
+                    send messageText to c
+                end if
+                return "sent"
+            end if
+        end repeat
+        return "chat not found"
+    end tell
+end run"#;
+
+    let fallback_output = run_osascript(
+        fallback_script,
+        &[chat_id, text.unwrap_or_default(), file_path.unwrap_or("")],
+    )
+    .context("Failed to run osascript fallback for group chat")?;
 
     if fallback_output.status.success() {
         let stdout = String::from_utf8_lossy(&fallback_output.stdout)

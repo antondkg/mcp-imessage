@@ -171,7 +171,7 @@ fn make_send_tool_route() -> ToolRoute<IMessageServer> {
 
     let mut tool_def = Tool::new(
         "messages_send",
-        Cow::Borrowed("Send an iMessage or SMS. Provide recipient as phone (E.164) or email. Use contacts_search to find their number if needed. For group chats: use chat_identifier from messages_threads. Can send text, files/images, or both. Messages.app must be running."),
+        Cow::Borrowed("Send an iMessage or SMS. Provide recipient as phone (E.164) or email. Use contacts_search to find their number if needed. For group chats: use chat_identifier from messages_threads. Can send text, files/images, or both. Messages.app must be running. This tool is only exposed when MCP_IMESSAGE_ENABLE_SEND=1."),
         schema,
     );
     tool_def.meta = Some(make_ui_meta());
@@ -335,7 +335,9 @@ impl IMessageServer {
         let mut router = Self::tool_router();
         router.add_route(make_threads_tool_route());
         router.add_route(make_fetch_tool_route());
-        router.add_route(make_send_tool_route());
+        if send::sending_enabled() {
+            router.add_route(make_send_tool_route());
+        }
         router.add_route(make_search_tool_route());
         router.add_route(make_contacts_search_tool_route());
         router.add_route(make_contacts_me_tool_route());
@@ -376,7 +378,8 @@ impl ServerHandler for IMessageServer {
              'search for [term]' -> messages_search (finds matching conversations AND messages). \
              'show recent chats' -> messages_threads. \
              'find [name]'s phone/email' -> contacts_search. \
-             'text [name]' -> contacts_search to get number, then messages_send."
+             'text [name]' -> contacts_search to get number, then messages_send. \
+             Note: messages_send is disabled unless MCP_IMESSAGE_ENABLE_SEND=1 is set."
                 .to_string(),
         )
     }

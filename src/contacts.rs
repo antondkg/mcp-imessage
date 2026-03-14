@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -80,13 +80,10 @@ fn load_from_sqlite() -> Option<(HashMap<String, String>, HashMap<String, String
     let mut any_success = false;
 
     for db_path in &dbs {
-        let conn = match Connection::open(db_path) {
+        let conn = match Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
             Ok(c) => c,
             Err(_) => continue,
         };
-        if conn.pragma_update(None, "query_only", "ON").is_err() {
-            continue;
-        }
 
         // Test access by trying a simple query
         if conn.prepare("SELECT COUNT(*) FROM ZABCDRECORD").is_err() {
@@ -409,11 +406,10 @@ pub fn search(query: &str) -> Result<Value> {
 
 /// Targeted osascript search - fast because Contacts.app filters server-side
 fn search_via_osascript(query: &str) -> Result<Vec<Value>> {
-    let escaped_query = query.replace('\\', "\\\\").replace('"', "\\\"");
-
-    let script = format!(
-        r#"tell application "Contacts"
-    set results to every person whose name contains "{query}"
+    let script = r#"on run argv
+    set queryText to item 1 of argv
+    tell application "Contacts"
+        set results to every person whose name contains queryText
     set output to ""
     repeat with p in results
         set pName to name of p
@@ -439,13 +435,14 @@ fn search_via_osascript(query: &str) -> Result<Vec<Value>> {
         set output to output & pName & "|" & phoneList & "|" & emailList & linefeed
     end repeat
     return output
-end tell"#,
-        query = escaped_query
-    );
+    end tell
+end run"#;
 
     let child = Command::new("osascript")
         .arg("-e")
-        .arg(&script)
+        .arg(script)
+        .arg("--")
+        .arg(query)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()

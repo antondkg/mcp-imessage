@@ -1,6 +1,6 @@
 use crate::contacts;
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -21,10 +21,8 @@ fn db_path() -> PathBuf {
 
 fn open_db() -> Result<Connection> {
     let path = db_path();
-    let conn =
-        Connection::open(&path).with_context(|| format!("Failed to open chat.db at {:?}", path))?;
-    conn.pragma_update(None, "query_only", "ON")?;
-    Ok(conn)
+    Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("Failed to open chat.db at {:?}", path))
 }
 
 /// Extract plain text from NSAttributedString binary blob (attributedBody column).
@@ -313,7 +311,7 @@ fn search_conversations_by_name(conn: &Connection, query: &str) -> Vec<Value> {
 
         // Resolve display name
         let resolved_name =
-            if display_name.as_ref().map_or(true, |n| n.is_empty()) && participants.len() == 1 {
+            if display_name.as_ref().is_none_or(|n| n.is_empty()) && participants.len() == 1 {
                 contacts::resolve_name(participants[0]["handle"].as_str().unwrap_or(""))
                     .or(display_name)
             } else {
@@ -657,7 +655,7 @@ pub fn threads(limit: Option<u32>, offset: Option<u32>) -> Result<Value> {
                     })
                     .collect();
                 // For 1-on-1 chats without a display_name, try to resolve the contact name
-                let resolved_name = if display_name.as_ref().map_or(true, |n| n.is_empty())
+                let resolved_name = if display_name.as_ref().is_none_or(|n| n.is_empty())
                     && participant_list.len() == 1
                 {
                     contacts::resolve_name(participant_list[0])
