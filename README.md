@@ -1,6 +1,15 @@
-# mcp-imessage
+<div align="center">
+  <h1>mcp-imessage</h1>
+  <p>A macOS MCP server for reading iMessage data, searching conversations, looking up contacts, and rendering everything in a native-style embedded UI.</p>
+  <p>
+    <img alt="macOS" src="https://img.shields.io/badge/macOS-Only-111827?style=flat-square&logo=apple&logoColor=white">
+    <img alt="Rust" src="https://img.shields.io/badge/Built%20with-Rust-b7410e?style=flat-square&logo=rust&logoColor=white">
+    <img alt="MCP" src="https://img.shields.io/badge/Protocol-MCP-2563eb?style=flat-square">
+    <img alt="License" src="https://img.shields.io/badge/License-MIT-16a34a?style=flat-square">
+  </p>
+</div>
 
-A public MCP server for macOS that can:
+`mcp-imessage` can:
 
 - read recent iMessage threads
 - fetch messages from a person or group chat
@@ -48,6 +57,22 @@ Most iMessage MCP experiments stop at raw JSON. This one is meant to be usable:
 - Rust stable
 - Messages.app signed in to iMessage
 - permission to access Messages data, Contacts, and Automation access for Messages.app when sending
+
+## Full Disk Access
+
+macOS protects `~/Library/Messages/chat.db`, so `mcp-imessage` usually needs Full Disk Access to read message history reliably.
+
+1. Open `System Settings`.
+2. Go to `Privacy & Security` -> `Full Disk Access`.
+3. Add and enable `mcp-imessage`.
+4. If you launch the server through another app, also grant Full Disk Access to that host app.
+
+Examples:
+
+- If you run the binary directly, add the compiled `mcp-imessage` binary.
+- If you run it from Terminal, iTerm, Claude, Codex, or another MCP host, add that app too.
+
+After enabling Full Disk Access, fully restart the host app before testing again.
 
 ## Security notes
 
