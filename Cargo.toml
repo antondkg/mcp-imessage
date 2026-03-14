@@ -2,6 +2,13 @@
 name = "mcp-imessage"
 version = "0.1.0"
 edition = "2021"
+description = "A macOS MCP server for reading contacts, browsing iMessage threads, searching messages, and sending messages with a native-style embedded UI."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/antondkg/mcp-imessage"
+homepage = "https://github.com/antondkg/mcp-imessage"
+keywords = ["mcp", "imessage", "macos", "messages", "apple"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "mcp-imessage"
@@ -10,10 +17,8 @@ path = "src/main.rs"
 [dependencies]
 rmcp = { version = "1.1.0", features = ["server", "transport-io", "macros"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
-tokio = { version = "1", features = ["full"] }
-serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde_json = "1"
-chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = "0.3"

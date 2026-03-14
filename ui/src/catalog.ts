@@ -19,7 +19,7 @@ export const catalog = defineCatalog(schema, {
         "iMessage chat bubble. isMe=true renders blue right-aligned (sent), isMe=false renders gray left-aligned (received). Set showAvatar=true on received messages to show sender initials.",
       example: {
         text: "hey whats up",
-        sender: "Jake",
+        sender: "Alex",
         time: "2:14 PM",
         isMe: false,
         showAvatar: true,
@@ -36,7 +36,7 @@ export const catalog = defineCatalog(schema, {
       description:
         "Conversation thread row with avatar, name, last message preview, time, and unread dot. Use in a vertical Stack to build a thread list.",
       example: {
-        name: "Jake Vollkommer",
+        name: "Alex Johnson",
         preview: "see you there",
         time: "2:19 PM",
         unread: true,
@@ -52,9 +52,9 @@ export const catalog = defineCatalog(schema, {
       description:
         "iOS-style contact card with centered avatar, name, phone numbers and emails. Comma-separate multiple phones/emails.",
       example: {
-        name: "Jake Vollkommer",
-        phones: "+1 (631) 745-7857",
-        emails: "jake@vallor.ai",
+        name: "Alex Johnson",
+        phones: "+1 (415) 555-0123",
+        emails: "alex@example.com",
       },
     },
 
@@ -68,7 +68,7 @@ export const catalog = defineCatalog(schema, {
       description:
         "Search result row showing sender, matched message text with highlighted query, and time. Use in a vertical Stack.",
       example: {
-        sender: "Jake",
+        sender: "Alex",
         text: "thinking about grabbing dinner",
         time: "Mar 6",
         query: "dinner",

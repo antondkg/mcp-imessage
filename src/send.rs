@@ -4,9 +4,16 @@ use std::process::Command;
 
 /// Send an iMessage to a recipient (phone number in E.164 format or email)
 /// Supports text, file attachments, or both.
-pub fn send_message(recipient: Option<&str>, chat_identifier: Option<&str>, text: Option<&str>, file_path: Option<&str>) -> Result<Value> {
+pub fn send_message(
+    recipient: Option<&str>,
+    chat_identifier: Option<&str>,
+    text: Option<&str>,
+    file_path: Option<&str>,
+) -> Result<Value> {
     if text.is_none() && file_path.is_none() {
-        return Err(anyhow::anyhow!("Provide either text or file_path (or both)"));
+        return Err(anyhow::anyhow!(
+            "Provide either text or file_path (or both)"
+        ));
     }
 
     // Validate file exists if provided
@@ -21,7 +28,8 @@ pub fn send_message(recipient: Option<&str>, chat_identifier: Option<&str>, text
         return send_to_group(chat_id, text, file_path);
     }
 
-    let recipient = recipient.ok_or_else(|| anyhow::anyhow!("Provide either recipient or chat_identifier"))?;
+    let recipient =
+        recipient.ok_or_else(|| anyhow::anyhow!("Provide either recipient or chat_identifier"))?;
     let escaped_recipient = recipient.replace('"', "\\\"");
 
     // Build the send commands
@@ -96,7 +104,10 @@ fn build_send_commands(target_var: &str, text: Option<&str>, file_path: Option<&
     let mut commands = Vec::new();
     if let Some(path) = file_path {
         let escaped_path = path.replace('"', "\\\"");
-        commands.push(format!("set theFile to \"{}\" as POSIX file as alias", escaped_path));
+        commands.push(format!(
+            "set theFile to \"{}\" as POSIX file as alias",
+            escaped_path
+        ));
         commands.push(format!("send theFile to {}", target_var));
     }
     if let Some(t) = text {
@@ -161,7 +172,9 @@ end tell"#,
         .context("Failed to run osascript fallback for group chat")?;
 
     if fallback_output.status.success() {
-        let stdout = String::from_utf8_lossy(&fallback_output.stdout).trim().to_string();
+        let stdout = String::from_utf8_lossy(&fallback_output.stdout)
+            .trim()
+            .to_string();
         if stdout == "sent" {
             return Ok(json!({
                 "success": true,

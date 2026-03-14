@@ -7,18 +7,16 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use rmcp::{
-    ErrorData, RoleServer,
-    ServerHandler,
     handler::server::router::tool::{ToolRoute, ToolRouter},
     model::{
         Annotated, CallToolResult, Content, ListResourcesResult, Meta, RawResource,
-        ReadResourceRequestParams, ReadResourceResult, ResourceContents,
-        ServerCapabilities, ServerInfo, Tool,
+        ReadResourceRequestParams, ReadResourceResult, ResourceContents, ServerCapabilities,
+        ServerInfo, Tool,
     },
-    tool_handler, tool_router,
     service::RequestContext,
-    ServiceExt,
+    tool_handler, tool_router,
     transport::stdio,
+    ErrorData, RoleServer, ServerHandler, ServiceExt,
 };
 use serde_json::json;
 
@@ -66,7 +64,10 @@ fn make_threads_tool_route() -> ToolRoute<IMessageServer> {
         Box::pin(async move {
             let args = context.arguments.unwrap_or_default();
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
-            let offset = args.get("offset").and_then(|v| v.as_u64()).map(|v| v as u32);
+            let offset = args
+                .get("offset")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32);
             let result = match messages::threads(limit, offset) {
                 Ok(v) => v.to_string(),
                 Err(e) => format!("{{\"error\": \"{}\"}}", e),
@@ -80,7 +81,7 @@ fn make_fetch_tool_route() -> ToolRoute<IMessageServer> {
     let schema = make_schema(json!({
         "name": {
             "type": "string",
-            "description": "Contact name to fetch conversation with (e.g. 'Jake Vollkommer'). Resolves to phone number automatically via contacts lookup. This is the easiest way to open a conversation."
+            "description": "Contact name to fetch a conversation with (for example, 'Alex Johnson'). Resolves to phone numbers or emails automatically via Contacts."
         },
         "participants": {
             "type": "array",
@@ -107,7 +108,7 @@ fn make_fetch_tool_route() -> ToolRoute<IMessageServer> {
 
     let mut tool_def = Tool::new(
         "messages_fetch",
-        Cow::Borrowed("Fetch iMessages from a conversation. Preferred: use 'name' to fetch by contact name (e.g. 'Jake'). Alternatives: 'participants' for phone numbers, 'chat_identifier' for group chats. Returns messages newest first with pagination."),
+        Cow::Borrowed("Fetch iMessages from a conversation. Preferred: use 'name' to fetch by contact name (for example, 'Alex'). Alternatives: 'participants' for phone numbers, or 'chat_identifier' for group chats. Returns messages newest first with pagination."),
         schema,
     );
     tool_def.meta = Some(make_ui_meta());
@@ -116,15 +117,30 @@ fn make_fetch_tool_route() -> ToolRoute<IMessageServer> {
         Box::pin(async move {
             let args = context.arguments.unwrap_or_default();
             let name = args.get("name").and_then(|v| v.as_str()).map(String::from);
-            let participants: Vec<String> = args.get("participants")
+            let participants: Vec<String> = args
+                .get("participants")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
-            let chat_identifier = args.get("chat_identifier").and_then(|v| v.as_str()).map(String::from);
+            let chat_identifier = args
+                .get("chat_identifier")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let before_timestamp = args.get("before_timestamp").and_then(|v| v.as_i64());
             let after_timestamp = args.get("after_timestamp").and_then(|v| v.as_i64());
-            let result = match messages::fetch(participants, chat_identifier, name, limit, before_timestamp, after_timestamp) {
+            let result = match messages::fetch(
+                participants,
+                chat_identifier,
+                name,
+                limit,
+                before_timestamp,
+                after_timestamp,
+            ) {
                 Ok(v) => v.to_string(),
                 Err(e) => format!("{{\"error\": \"{}\"}}", e),
             };
@@ -163,10 +179,19 @@ fn make_send_tool_route() -> ToolRoute<IMessageServer> {
     ToolRoute::new_dyn(tool_def, |context| {
         Box::pin(async move {
             let args = context.arguments.unwrap_or_default();
-            let recipient = args.get("recipient").and_then(|v| v.as_str()).map(String::from);
-            let chat_identifier = args.get("chat_identifier").and_then(|v| v.as_str()).map(String::from);
+            let recipient = args
+                .get("recipient")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let chat_identifier = args
+                .get("chat_identifier")
+                .and_then(|v| v.as_str())
+                .map(String::from);
             let text = args.get("text").and_then(|v| v.as_str()).map(String::from);
-            let file_path = args.get("file_path").and_then(|v| v.as_str()).map(String::from);
+            let file_path = args
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .map(String::from);
 
             let send_result = send::send_message(
                 recipient.as_deref(),
@@ -206,7 +231,7 @@ fn make_search_tool_route() -> ToolRoute<IMessageServer> {
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Search query: matches contact names (returns their conversations) AND message text content. E.g. 'Jake' finds Jake's conversations + messages containing 'Jake'."
+                "description": "Search query that matches contact names and message text. For example, 'Alex' finds Alex's conversations and messages that contain 'Alex'."
             },
             "limit": {
                 "type": "integer",
@@ -230,7 +255,11 @@ fn make_search_tool_route() -> ToolRoute<IMessageServer> {
     ToolRoute::new_dyn(tool_def, |context| {
         Box::pin(async move {
             let args = context.arguments.unwrap_or_default();
-            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let limit = args.get("limit").and_then(|v| v.as_u64()).map(|v| v as u32);
             let before_timestamp = args.get("before_timestamp").and_then(|v| v.as_i64());
             let result = match messages::search(query, limit, before_timestamp) {
@@ -265,7 +294,11 @@ fn make_contacts_search_tool_route() -> ToolRoute<IMessageServer> {
     ToolRoute::new_dyn(tool_def, |context| {
         Box::pin(async move {
             let args = context.arguments.unwrap_or_default();
-            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let query = args
+                .get("query")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let result = match contacts::search(&query) {
                 Ok(v) => v.to_string(),
                 Err(e) => format!("{{\"error\": \"{}\"}}", e),
@@ -376,11 +409,12 @@ impl ServerHandler for IMessageServer {
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ReadResourceResult, ErrorData>> + Send + '_ {
         let result = if request.uri == UI_RESOURCE_URI {
-            Ok(ReadResourceResult::new(vec![
-                ResourceContents::text(UI_HTML, UI_RESOURCE_URI)
-                    .with_mime_type("text/html;profile=mcp-app")
-                    .with_meta(ui_csp_meta()),
-            ]))
+            Ok(ReadResourceResult::new(vec![ResourceContents::text(
+                UI_HTML,
+                UI_RESOURCE_URI,
+            )
+            .with_mime_type("text/html;profile=mcp-app")
+            .with_meta(ui_csp_meta())]))
         } else {
             Err(ErrorData::resource_not_found(
                 "resource_not_found",

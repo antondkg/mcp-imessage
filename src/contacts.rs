@@ -36,14 +36,16 @@ fn get_cache() -> &'static Mutex<ContactsCache> {
 
 /// Normalize a phone number by stripping spaces, dashes, parens
 fn normalize_phone(phone: &str) -> String {
-    phone.chars().filter(|c| c.is_ascii_digit() || *c == '+').collect()
+    phone
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '+')
+        .collect()
 }
 
 /// Find all AddressBook SQLite databases
 fn find_address_book_dbs() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_default();
-    let sources_dir = PathBuf::from(&home)
-        .join("Library/Application Support/AddressBook/Sources");
+    let sources_dir = PathBuf::from(&home).join("Library/Application Support/AddressBook/Sources");
 
     let mut dbs = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&sources_dir) {
@@ -97,7 +99,7 @@ fn load_from_sqlite() -> Option<(HashMap<String, String>, HashMap<String, String
             "SELECT p.ZFULLNUMBER, r.ZFIRSTNAME, r.ZLASTNAME
              FROM ZABCDPHONENUMBER p
              JOIN ZABCDRECORD r ON p.ZOWNER = r.Z_PK
-             WHERE p.ZFULLNUMBER IS NOT NULL"
+             WHERE p.ZFULLNUMBER IS NOT NULL",
         ) {
             if let Ok(rows) = stmt.query_map([], |row| {
                 let phone: String = row.get(0)?;
@@ -122,7 +124,7 @@ fn load_from_sqlite() -> Option<(HashMap<String, String>, HashMap<String, String
             "SELECT e.ZADDRESSNORMALIZED, r.ZFIRSTNAME, r.ZLASTNAME
              FROM ZABCDEMAILADDRESS e
              JOIN ZABCDRECORD r ON e.ZOWNER = r.Z_PK
-             WHERE e.ZADDRESSNORMALIZED IS NOT NULL"
+             WHERE e.ZADDRESSNORMALIZED IS NOT NULL",
         ) {
             if let Ok(rows) = stmt.query_map([], |row| {
                 let email: String = row.get(0)?;
@@ -215,22 +217,37 @@ end tell"#;
     Some((phone_map, email_map))
 }
 
-fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> Option<std::process::Output> {
+fn wait_with_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> Option<std::process::Output> {
     let start = Instant::now();
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stdout = child.stdout.take().map(|mut s| {
-                    let mut buf = Vec::new();
-                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                    buf
-                }).unwrap_or_default();
-                let stderr = child.stderr.take().map(|mut s| {
-                    let mut buf = Vec::new();
-                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                    buf
-                }).unwrap_or_default();
-                return Some(std::process::Output { status, stdout, stderr });
+                let stdout = child
+                    .stdout
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                return Some(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
             }
             Ok(None) => {
                 if start.elapsed() >= timeout {
@@ -352,12 +369,16 @@ pub fn search(query: &str) -> Result<Value> {
     let mut contacts_map: HashMap<String, (Vec<String>, Vec<String>)> = HashMap::new();
 
     for (phone, name) in &c.phone_to_name {
-        let entry = contacts_map.entry(name.clone()).or_insert_with(|| (Vec::new(), Vec::new()));
+        let entry = contacts_map
+            .entry(name.clone())
+            .or_insert_with(|| (Vec::new(), Vec::new()));
         entry.0.push(phone.clone());
     }
 
     for (email, name) in &c.email_to_name {
-        let entry = contacts_map.entry(name.clone()).or_insert_with(|| (Vec::new(), Vec::new()));
+        let entry = contacts_map
+            .entry(name.clone())
+            .or_insert_with(|| (Vec::new(), Vec::new()));
         entry.1.push(email.clone());
     }
 
@@ -366,7 +387,9 @@ pub fn search(query: &str) -> Result<Value> {
         .filter(|(name, (phones, emails))| {
             name.to_lowercase().contains(&query_lower)
                 || phones.iter().any(|p| p.contains(&query_lower))
-                || emails.iter().any(|e| e.to_lowercase().contains(&query_lower))
+                || emails
+                    .iter()
+                    .any(|e| e.to_lowercase().contains(&query_lower))
         })
         .map(|(name, (phones, emails))| {
             json!({
@@ -443,10 +466,22 @@ end tell"#,
         .map(|line| {
             let parts: Vec<&str> = line.splitn(3, '|').collect();
             let name = parts.first().copied().unwrap_or("").trim().to_string();
-            let phones: Vec<&str> = parts.get(1).copied().unwrap_or("")
-                .split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-            let emails: Vec<&str> = parts.get(2).copied().unwrap_or("")
-                .split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            let phones: Vec<&str> = parts
+                .get(1)
+                .copied()
+                .unwrap_or("")
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let emails: Vec<&str> = parts
+                .get(2)
+                .copied()
+                .unwrap_or("")
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
             json!({ "name": name, "phones": phones, "emails": emails })
         })
         .collect();
@@ -500,10 +535,22 @@ end tell"#;
 
     let parts: Vec<&str> = line.splitn(3, '|').collect();
     let name = parts.first().copied().unwrap_or("").trim();
-    let phones: Vec<&str> = parts.get(1).copied().unwrap_or("")
-        .split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
-    let emails: Vec<&str> = parts.get(2).copied().unwrap_or("")
-        .split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+    let phones: Vec<&str> = parts
+        .get(1)
+        .copied()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let emails: Vec<&str> = parts
+        .get(2)
+        .copied()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
 
     Ok(json!({
         "me": {

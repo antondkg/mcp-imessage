@@ -1,6 +1,6 @@
 use crate::contacts;
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -21,8 +21,8 @@ fn db_path() -> PathBuf {
 
 fn open_db() -> Result<Connection> {
     let path = db_path();
-    let conn = Connection::open(&path)
-        .with_context(|| format!("Failed to open chat.db at {:?}", path))?;
+    let conn =
+        Connection::open(&path).with_context(|| format!("Failed to open chat.db at {:?}", path))?;
     conn.pragma_update(None, "query_only", "ON")?;
     Ok(conn)
 }
@@ -70,7 +70,9 @@ fn extract_text_from_attributed_body(data: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(text_bytes).to_string();
 
     // Trim leading control characters (sometimes has \r, \x03, \x0c prefix)
-    let trimmed = text.trim_start_matches(|c: char| c.is_control()).to_string();
+    let trimmed = text
+        .trim_start_matches(|c: char| c.is_control())
+        .to_string();
     if trimmed.is_empty() {
         None
     } else {
@@ -131,7 +133,10 @@ fn resolve_name_to_phones(name: &str) -> Result<Vec<String>> {
             if let Some(phone_arr) = contact["phones"].as_array() {
                 for p in phone_arr {
                     if let Some(phone) = p.as_str() {
-                        let normalized = phone.chars().filter(|c| c.is_ascii_digit() || *c == '+').collect::<String>();
+                        let normalized = phone
+                            .chars()
+                            .filter(|c| c.is_ascii_digit() || *c == '+')
+                            .collect::<String>();
                         if !normalized.is_empty() {
                             phones.push(normalized);
                         }
@@ -166,10 +171,16 @@ pub fn fetch(
     } else if !participants.is_empty() {
         participants.clone()
     } else {
-        return Err(anyhow::anyhow!("Provide name, participants, or chat_identifier"));
+        return Err(anyhow::anyhow!(
+            "Provide name, participants, or chat_identifier"
+        ));
     };
 
-    let placeholders: String = identifiers.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let placeholders: String = identifiers
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
 
     let sql = format!(
         "SELECT
@@ -220,16 +231,30 @@ pub fn fetch(
             let is_from_me: bool = row.get(4)?;
             let handle_id: Option<String> = row.get(5)?;
             let chat_id: String = row.get(6)?;
-            Ok((rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id))
+            Ok((
+                rowid,
+                text,
+                attributed_body,
+                date_apple,
+                is_from_me,
+                handle_id,
+                chat_id,
+            ))
         })?
         .filter_map(|r| r.ok())
-        .filter_map(|(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
-            let resolved = resolve_text(text, attributed_body)?;
-            Some(row_to_message(rowid, resolved, date_apple, is_from_me, handle_id, chat_id))
-        })
+        .filter_map(
+            |(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
+                let resolved = resolve_text(text, attributed_body)?;
+                Some(row_to_message(
+                    rowid, resolved, date_apple, is_from_me, handle_id, chat_id,
+                ))
+            },
+        )
         .collect();
 
-    let next_cursor = messages.last().map(|m| m["timestamp"].as_i64().unwrap_or(0));
+    let next_cursor = messages
+        .last()
+        .map(|m| m["timestamp"].as_i64().unwrap_or(0));
 
     Ok(json!({
         "messages": messages,
@@ -249,7 +274,11 @@ fn search_conversations_by_name(conn: &Connection, query: &str) -> Vec<Value> {
     }
 
     // Find all chats where these handles participate
-    let placeholders: String = matching_handles.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let placeholders: String = matching_handles
+        .iter()
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(", ");
     let sql = format!(
         "SELECT DISTINCT c.rowid, c.chat_identifier, c.display_name
          FROM chat c
@@ -283,23 +312,27 @@ fn search_conversations_by_name(conn: &Connection, query: &str) -> Vec<Value> {
         let participants = get_chat_participants(conn, chat_id);
 
         // Resolve display name
-        let resolved_name = if display_name.as_ref().map_or(true, |n| n.is_empty()) && participants.len() == 1 {
-            contacts::resolve_name(participants[0]["handle"].as_str().unwrap_or(""))
-                .or(display_name)
-        } else {
-            display_name
-        };
+        let resolved_name =
+            if display_name.as_ref().map_or(true, |n| n.is_empty()) && participants.len() == 1 {
+                contacts::resolve_name(participants[0]["handle"].as_str().unwrap_or(""))
+                    .or(display_name)
+            } else {
+                display_name
+            };
 
         // Get recent messages
         let recent = fetch_messages_for_chat(conn, &chat_identifier, 10).unwrap_or_default();
 
         // Get last message info
-        let (last_message, last_timestamp, last_is_from_me) = recent.first()
-            .map(|m| (
-                m["text"].as_str().unwrap_or("").to_string(),
-                m["timestamp"].as_i64().unwrap_or(0),
-                m["is_from_me"].as_bool().unwrap_or(false),
-            ))
+        let (last_message, last_timestamp, last_is_from_me) = recent
+            .first()
+            .map(|m| {
+                (
+                    m["text"].as_str().unwrap_or("").to_string(),
+                    m["timestamp"].as_i64().unwrap_or(0),
+                    m["is_from_me"].as_bool().unwrap_or(false),
+                )
+            })
             .unwrap_or_default();
 
         if last_timestamp == 0 {
@@ -352,11 +385,7 @@ fn get_chat_participants(conn: &Connection, chat_id: i64) -> Vec<Value> {
     .unwrap_or_default()
 }
 
-pub fn search(
-    query: String,
-    limit: Option<u32>,
-    before_timestamp: Option<i64>,
-) -> Result<Value> {
+pub fn search(query: String, limit: Option<u32>, before_timestamp: Option<i64>) -> Result<Value> {
     let conn = open_db()?;
     let limit = limit.unwrap_or(50).min(200) as usize;
     let query_lower = query.to_lowercase();
@@ -385,21 +414,36 @@ pub fn search(
 
     let mut stmt = conn.prepare(sql_text)?;
     let mut messages: Vec<Value> = stmt
-        .query_map(params![pattern, has_before, before_apple, limit as i64], |row| {
-            let rowid: i64 = row.get(0)?;
-            let text: Option<String> = row.get(1)?;
-            let attributed_body: Option<Vec<u8>> = row.get(2)?;
-            let date_apple: i64 = row.get(3)?;
-            let is_from_me: bool = row.get(4)?;
-            let handle_id: Option<String> = row.get(5)?;
-            let chat_id: String = row.get(6)?;
-            Ok((rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id))
-        })?
+        .query_map(
+            params![pattern, has_before, before_apple, limit as i64],
+            |row| {
+                let rowid: i64 = row.get(0)?;
+                let text: Option<String> = row.get(1)?;
+                let attributed_body: Option<Vec<u8>> = row.get(2)?;
+                let date_apple: i64 = row.get(3)?;
+                let is_from_me: bool = row.get(4)?;
+                let handle_id: Option<String> = row.get(5)?;
+                let chat_id: String = row.get(6)?;
+                Ok((
+                    rowid,
+                    text,
+                    attributed_body,
+                    date_apple,
+                    is_from_me,
+                    handle_id,
+                    chat_id,
+                ))
+            },
+        )?
         .filter_map(|r| r.ok())
-        .filter_map(|(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
-            let resolved = resolve_text(text, attributed_body)?;
-            Some(row_to_message(rowid, resolved, date_apple, is_from_me, handle_id, chat_id))
-        })
+        .filter_map(
+            |(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
+                let resolved = resolve_text(text, attributed_body)?;
+                Some(row_to_message(
+                    rowid, resolved, date_apple, is_from_me, handle_id, chat_id,
+                ))
+            },
+        )
         .collect();
 
     // Pass 2: attributedBody messages (text IS NULL)
@@ -428,16 +472,28 @@ pub fn search(
                 let is_from_me: bool = row.get(4)?;
                 let handle_id: Option<String> = row.get(5)?;
                 let chat_id: String = row.get(6)?;
-                Ok((rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id))
+                Ok((
+                    rowid,
+                    text,
+                    attributed_body,
+                    date_apple,
+                    is_from_me,
+                    handle_id,
+                    chat_id,
+                ))
             })?
             .filter_map(|r| r.ok())
-            .filter_map(|(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
-                let resolved = resolve_text(text, attributed_body)?;
-                if !resolved.to_lowercase().contains(&query_lower) {
-                    return None;
-                }
-                Some(row_to_message(rowid, resolved, date_apple, is_from_me, handle_id, chat_id))
-            })
+            .filter_map(
+                |(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
+                    let resolved = resolve_text(text, attributed_body)?;
+                    if !resolved.to_lowercase().contains(&query_lower) {
+                        return None;
+                    }
+                    Some(row_to_message(
+                        rowid, resolved, date_apple, is_from_me, handle_id, chat_id,
+                    ))
+                },
+            )
             .take(remaining)
             .collect();
 
@@ -452,7 +508,9 @@ pub fn search(
     });
     messages.truncate(limit);
 
-    let next_cursor = messages.last().map(|m| m["timestamp"].as_i64().unwrap_or(0));
+    let next_cursor = messages
+        .last()
+        .map(|m| m["timestamp"].as_i64().unwrap_or(0));
 
     Ok(json!({
         "conversations": conversations,
@@ -464,7 +522,11 @@ pub fn search(
     }))
 }
 
-fn fetch_messages_for_chat(conn: &Connection, chat_identifier: &str, limit: u32) -> Result<Vec<Value>> {
+fn fetch_messages_for_chat(
+    conn: &Connection,
+    chat_identifier: &str,
+    limit: u32,
+) -> Result<Vec<Value>> {
     let sql = "SELECT m.rowid, m.text, m.attributedBody, m.date, m.is_from_me,
                       h.id as handle_id, c.chat_identifier
                FROM message m
@@ -485,13 +547,25 @@ fn fetch_messages_for_chat(conn: &Connection, chat_identifier: &str, limit: u32)
             let is_from_me: bool = row.get(4)?;
             let handle_id: Option<String> = row.get(5)?;
             let chat_id: String = row.get(6)?;
-            Ok((rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id))
+            Ok((
+                rowid,
+                text,
+                attributed_body,
+                date_apple,
+                is_from_me,
+                handle_id,
+                chat_id,
+            ))
         })?
         .filter_map(|r| r.ok())
-        .filter_map(|(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
-            let resolved = resolve_text(text, attributed_body)?;
-            Some(row_to_message(rowid, resolved, date_apple, is_from_me, handle_id, chat_id))
-        })
+        .filter_map(
+            |(rowid, text, attributed_body, date_apple, is_from_me, handle_id, chat_id)| {
+                let resolved = resolve_text(text, attributed_body)?;
+                Some(row_to_message(
+                    rowid, resolved, date_apple, is_from_me, handle_id, chat_id,
+                ))
+            },
+        )
         .collect();
     Ok(messages)
 }
@@ -542,43 +616,65 @@ pub fn threads(limit: Option<u32>, offset: Option<u32>) -> Result<Value> {
             let last_date_apple: i64 = row.get(5)?;
             let is_from_me: bool = row.get(6)?;
             let participants: Option<String> = row.get(7)?;
-            Ok((chat_id, chat_identifier, display_name, text, attributed_body, last_date_apple, is_from_me, participants))
+            Ok((
+                chat_id,
+                chat_identifier,
+                display_name,
+                text,
+                attributed_body,
+                last_date_apple,
+                is_from_me,
+                participants,
+            ))
         })?
         .filter_map(|r| r.ok())
-        .map(|(chat_id, chat_identifier, display_name, text, attributed_body, last_date_apple, is_from_me, participants)| {
-            let unix_ts = apple_ts_to_unix(last_date_apple);
-            let last_message = resolve_text(text, attributed_body)
-                .unwrap_or_else(|| "(attachment)".to_string());
-            let participant_list: Vec<&str> = participants
-                .as_deref()
-                .unwrap_or("")
-                .split(',')
-                .filter(|s| !s.is_empty())
-                .collect();
-            // Resolve contact names for participants
-            let participant_names: Vec<Value> = participant_list
-                .iter()
-                .map(|p| {
-                    let name = contacts::resolve_name(p);
-                    json!({ "handle": p, "name": name })
+        .map(
+            |(
+                chat_id,
+                chat_identifier,
+                display_name,
+                text,
+                attributed_body,
+                last_date_apple,
+                is_from_me,
+                participants,
+            )| {
+                let unix_ts = apple_ts_to_unix(last_date_apple);
+                let last_message = resolve_text(text, attributed_body)
+                    .unwrap_or_else(|| "(attachment)".to_string());
+                let participant_list: Vec<&str> = participants
+                    .as_deref()
+                    .unwrap_or("")
+                    .split(',')
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                // Resolve contact names for participants
+                let participant_names: Vec<Value> = participant_list
+                    .iter()
+                    .map(|p| {
+                        let name = contacts::resolve_name(p);
+                        json!({ "handle": p, "name": name })
+                    })
+                    .collect();
+                // For 1-on-1 chats without a display_name, try to resolve the contact name
+                let resolved_name = if display_name.as_ref().map_or(true, |n| n.is_empty())
+                    && participant_list.len() == 1
+                {
+                    contacts::resolve_name(participant_list[0])
+                } else {
+                    display_name.clone()
+                };
+                json!({
+                    "chat_id": chat_id,
+                    "chat_identifier": chat_identifier,
+                    "display_name": resolved_name,
+                    "last_message": last_message,
+                    "last_timestamp": unix_ts,
+                    "last_is_from_me": is_from_me,
+                    "participants": participant_names
                 })
-                .collect();
-            // For 1-on-1 chats without a display_name, try to resolve the contact name
-            let resolved_name = if display_name.as_ref().map_or(true, |n| n.is_empty()) && participant_list.len() == 1 {
-                contacts::resolve_name(participant_list[0])
-            } else {
-                display_name.clone()
-            };
-            json!({
-                "chat_id": chat_id,
-                "chat_identifier": chat_identifier,
-                "display_name": resolved_name,
-                "last_message": last_message,
-                "last_timestamp": unix_ts,
-                "last_is_from_me": is_from_me,
-                "participants": participant_names
-            })
-        })
+            },
+        )
         .collect();
 
     // When showing <= 5 threads, include 10 recent messages per thread

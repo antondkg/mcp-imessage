@@ -4,18 +4,16 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "vite build",
-    "start": "node --import tsx server.ts --stdio",
-    "start:stdio": "node --import tsx server.ts --stdio",
-    "dev": "tsx watch server.ts --stdio"
+    "build": "npm run typecheck && vite build",
+    "dev": "vite",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@json-render/core": "latest",
-    "@json-render/mcp": "latest",
     "@json-render/react": "latest",
     "@json-render/shadcn": "latest",
     "@modelcontextprotocol/ext-apps": "^1.2.0",
-    "@modelcontextprotocol/sdk": "^1.27.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^4.3.6"
@@ -26,7 +24,6 @@
     "@tailwindcss/vite": "^4.2.1",
     "@vitejs/plugin-react": "^5.1.4",
     "tailwindcss": "^4.2.1",
-    "tsx": "^4.21.0",
     "typescript": "^5.7.2",
     "vite": "^6.3.5",
     "vite-plugin-singlefile": "^2.3.0"
