@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const ENABLE_SEND_ENV: &str = "MCP_IMESSAGE_ENABLE_SEND";
 
@@ -27,19 +28,7 @@ pub fn send_message(
         ));
     }
 
-    if recipient.is_some() && chat_identifier.is_some() {
-        return Err(anyhow::anyhow!(
-            "Provide either recipient or chat_identifier, not both"
-        ));
-    }
-
-    if text.is_none() && file_path.is_none() {
-        return Err(anyhow::anyhow!(
-            "Provide either text or file_path (or both)"
-        ));
-    }
-
-    let file_path = normalize_file_path(file_path)?;
+    let file_path = validate_message_request(recipient, chat_identifier, text, file_path)?;
 
     // Group chat: send to chat by GUID
     if let Some(chat_id) = chat_identifier {
@@ -124,6 +113,89 @@ fn normalize_file_path(file_path: Option<&str>) -> Result<Option<String>> {
     }
 
     Ok(Some(canonical.to_string_lossy().into_owned()))
+}
+
+pub fn validate_message_request(
+    recipient: Option<&str>,
+    chat_identifier: Option<&str>,
+    text: Option<&str>,
+    file_path: Option<&str>,
+) -> Result<Option<String>> {
+    if recipient.is_some() && chat_identifier.is_some() {
+        return Err(anyhow::anyhow!(
+            "Provide either recipient or chat_identifier, not both"
+        ));
+    }
+
+    let has_text = text.is_some_and(|value| !value.trim().is_empty());
+    if !has_text && file_path.is_none() {
+        return Err(anyhow::anyhow!(
+            "Provide either text or file_path (or both)"
+        ));
+    }
+
+    if let Some(value) = recipient {
+        validate_recipient_phone(value)?;
+    }
+
+    normalize_file_path(file_path)
+}
+
+fn validate_recipient_phone(recipient: &str) -> Result<()> {
+    let digits_only = recipient
+        .strip_prefix('+')
+        .unwrap_or(recipient)
+        .chars()
+        .all(|value| value.is_ascii_digit());
+    let digit_count = recipient.chars().filter(|value| value.is_ascii_digit()).count();
+
+    if recipient.starts_with('+') && digits_only && (7..=15).contains(&digit_count) {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "recipient must be a phone number in E.164 format like +14155550123. Use contacts_search first to find the number."
+        ))
+    }
+}
+
+pub fn optimistic_message(
+    recipient: Option<&str>,
+    chat_identifier: Option<&str>,
+    text: Option<&str>,
+    file_path: Option<&str>,
+    status: &str,
+) -> Value {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0);
+
+    json!({
+        "id": -timestamp,
+        "text": preview_text(text, file_path),
+        "timestamp": timestamp,
+        "is_from_me": true,
+        "sender": "me",
+        "chat_identifier": chat_identifier.or(recipient).unwrap_or("pending"),
+        "delivery_status": status,
+        "is_optimistic": true
+    })
+}
+
+fn preview_text(text: Option<&str>, file_path: Option<&str>) -> String {
+    match (
+        text.map(str::trim).filter(|value| !value.is_empty()),
+        file_path.and_then(|path| {
+            PathBuf::from(path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        }),
+    ) {
+        (Some(text), Some(file_name)) => format!("{text}\n\nAttachment: {file_name}"),
+        (Some(text), None) => text.to_string(),
+        (None, Some(file_name)) => format!("Attachment: {file_name}"),
+        (None, None) => String::new(),
+    }
 }
 
 fn run_osascript(script: &str, args: &[&str]) -> Result<std::process::Output> {

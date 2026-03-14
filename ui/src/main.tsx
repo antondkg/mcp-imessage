@@ -1,5 +1,5 @@
 import "./globals.css";
-import { Component, useState, useEffect, type ReactNode } from "react";
+import { Component, useState, useEffect, useRef, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { App as McpApp } from "@modelcontextprotocol/ext-apps";
 import { JSONUIProvider, Renderer, defineRegistry } from "@json-render/react";
@@ -16,6 +16,8 @@ import {
   ConversationView,
   ContactListView,
   ContactMeView,
+  DraftApprovalView,
+  MessagesConversationView,
   SendResultView,
   SearchResultsView,
 } from "./imessage-components";
@@ -78,6 +80,7 @@ type ViewData =
   | { type: "messages"; data: any }
   | { type: "contacts"; data: any }
   | { type: "contact_me"; data: any }
+  | { type: "draft"; data: any }
   | { type: "sent"; data: any }
   | { type: "search"; data: any };
 
@@ -126,6 +129,10 @@ function tryParseAny(data: unknown): ViewData | null {
   if (obj.success !== undefined && obj.recent_messages) {
     return { type: "sent", data: obj };
   }
+  // Draft result with approval UI
+  if (obj.draft && obj.recent_messages) {
+    return { type: "draft", data: obj };
+  }
   // Search results (has query + messages)
   if (Array.isArray(obj.messages) && obj.query) {
     return { type: "search", data: obj };
@@ -156,6 +163,7 @@ function tryParseAny(data: unknown): ViewData | null {
 function McpAppView() {
   const [view, setView] = useState<ViewData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const appRef = useRef<McpApp | null>(null);
 
   useEffect(() => {
     let viewReceived = false;
@@ -206,6 +214,7 @@ function McpAppView() {
     window.addEventListener("message", onMessage);
 
     const app = new McpApp({ name: "imessage-ui", version: "1.0.0" });
+    appRef.current = app;
 
     app.ontoolresult = (result) => tryHandle(result);
 
@@ -234,9 +243,32 @@ function McpAppView() {
 
     return () => {
       window.removeEventListener("message", onMessage);
+      appRef.current = null;
       app.close().catch(() => {});
     };
   }, []);
+
+  async function handleDraftSend(args: {
+    recipient?: string;
+    chat_identifier?: string;
+    text?: string;
+    file_path?: string;
+  }) {
+    const app = appRef.current;
+    if (!app) {
+      throw new Error("MCP app is not connected yet.");
+    }
+
+    const result = await app.callServerTool({
+      name: "messages_send",
+      arguments: args,
+    });
+    const parsed = tryParseAny(result);
+    if (!parsed) {
+      throw new Error("Send completed but the UI could not parse the result.");
+    }
+    setView(parsed);
+  }
 
   if (error) {
     return (
@@ -258,12 +290,51 @@ function McpAppView() {
     <div className="w-full" style={{ fontFamily: FONT_FAMILY }}>{children}</div>
   );
 
-  if (view.type === "threads") return wrap(<ThreadListView threads={view.data.threads} />);
-  if (view.type === "messages") return wrap(<ConversationView messages={view.data.messages} />);
+  if (view.type === "threads") {
+    return wrap(
+      <ThreadListView
+        threads={view.data.threads}
+        onSendDraft={handleDraftSend}
+      />,
+    );
+  }
+  if (view.type === "messages") {
+    return wrap(
+      <MessagesConversationView
+        messages={view.data.messages}
+        onSendDraft={handleDraftSend}
+      />,
+    );
+  }
   if (view.type === "contacts") return wrap(<ContactListView contacts={view.data.contacts} />);
   if (view.type === "contact_me") return wrap(<ContactMeView me={view.data.me} />);
-  if (view.type === "sent") return wrap(<SendResultView data={view.data} />);
-  if (view.type === "search") return wrap(<SearchResultsView messages={view.data.messages} conversations={view.data.conversations} query={view.data.query} />);
+  if (view.type === "draft") {
+    return wrap(
+      <DraftApprovalView
+        draft={view.data.draft}
+        recentMessages={view.data.recent_messages}
+        onSendDraft={handleDraftSend}
+      />,
+    );
+  }
+  if (view.type === "sent") {
+    return wrap(
+      <SendResultView
+        data={view.data}
+        onSendDraft={handleDraftSend}
+      />,
+    );
+  }
+  if (view.type === "search") {
+    return wrap(
+      <SearchResultsView
+        messages={view.data.messages}
+        conversations={view.data.conversations}
+        query={view.data.query}
+        onSendDraft={handleDraftSend}
+      />,
+    );
+  }
 
   return (
     <JSONUIProvider registry={registry} initialState={view.spec.state ?? {}}>

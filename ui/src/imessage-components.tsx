@@ -551,39 +551,421 @@ interface MessageData {
   sender: string;
   sender_name?: string;
   chat_identifier: string;
+  delivery_status?: string;
+  is_optimistic?: boolean;
 }
 
-export function ThreadListView({ threads }: { threads: ThreadData[] }) {
-  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+function mergeMessages(
+  messages: MessageData[],
+  optimistic?: MessageData | null,
+): MessageData[] {
+  if (!optimistic) return messages;
+  const existingIndex = messages.findIndex(
+    (message) => isSameRenderedMessage(message, optimistic),
+  );
+  if (existingIndex === -1) {
+    return [optimistic, ...messages];
+  }
+
+  const merged = [...messages];
+  merged[existingIndex] = reconcileRenderedMessage(
+    messages[existingIndex],
+    optimistic,
+  );
+  return merged;
+}
+
+function normalizeMessageText(value: string): string {
+  return value.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function areTextsEffectivelySame(a: string, b: string): boolean {
+  const left = normalizeMessageText(a);
+  const right = normalizeMessageText(b);
+
+  if (!left || !right) return left === right;
+  if (left === right) return true;
+
+  const longer = left.length >= right.length ? left : right;
+  const shorter = left.length >= right.length ? right : left;
+  const lengthDiff = longer.length - shorter.length;
+
+  if (lengthDiff <= 4 && (longer.startsWith(shorter) || shorter.startsWith(longer))) {
+    return true;
+  }
+
+  if (longer.length > 24 && shorter.length > 24) {
+    const sharedPrefixLength = [...longer].findIndex((char, index) => char !== shorter[index]);
+    const prefix = sharedPrefixLength === -1 ? shorter.length : sharedPrefixLength;
+    return prefix >= shorter.length - 4;
+  }
+
+  return false;
+}
+
+function isSameRenderedMessage(
+  message: MessageData,
+  optimistic: MessageData,
+): boolean {
+  return (
+    message.id === optimistic.id ||
+    (
+      Math.abs(message.timestamp - optimistic.timestamp) <= 120 &&
+      message.is_from_me === optimistic.is_from_me &&
+      str(message.chat_identifier) === str(optimistic.chat_identifier) &&
+      areTextsEffectivelySame(str(message.text), str(optimistic.text))
+    )
+  );
+}
+
+function reconcileRenderedMessage(
+  message: MessageData,
+  optimistic: MessageData,
+): MessageData {
+  const messageText = str(message.text);
+  const optimisticText = str(optimistic.text);
+  const preferOptimisticText =
+    optimisticText.length > messageText.length &&
+    areTextsEffectivelySame(messageText, optimisticText);
+
+  return {
+    ...message,
+    text: preferOptimisticText ? optimisticText : messageText,
+    delivery_status: optimistic.delivery_status ?? message.delivery_status,
+    is_optimistic: false,
+  };
+}
+
+function ConversationHeader({
+  title,
+  onBack,
+}: {
+  title: string;
+  onBack?: () => void;
+}) {
   const dark = useIsDark();
 
-  if (selectedIdx !== null) {
-    const thread = threads[selectedIdx];
-    const messages = arr(thread.recent_messages) as MessageData[];
-    const name = str(thread.display_name) || str(thread.chat_identifier);
-    return (
-      <div style={{ width: "100%" }}>
-        <div
-          onClick={() => setSelectedIdx(null)}
+  return (
+    <div
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 10,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "12px 16px",
+        borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
+        backgroundColor: dark ? "rgba(28,28,30,0.94)" : "rgba(255,255,255,0.94)",
+        backdropFilter: "blur(18px)",
+      }}
+    >
+      {onBack ? (
+        <button
+          type="button"
+          onClick={onBack}
           style={{
+            border: "none",
+            background: "transparent",
+            color: BLUE,
             display: "flex",
             alignItems: "center",
             gap: 6,
-            padding: "12px 16px",
+            padding: 0,
             cursor: "pointer",
-            borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
-            color: BLUE,
             fontSize: 16,
             fontWeight: 500,
+            flexShrink: 0,
           }}
         >
           <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
             <path d="M7 1L1.5 7L7 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
-          <span>{name}</span>
-        </div>
-        <ConversationView messages={messages} />
+          <span>Back</span>
+        </button>
+      ) : (
+        <div style={{ width: 44, flexShrink: 0 }} />
+      )}
+      <div
+        style={{
+          flex: 1,
+          textAlign: "center",
+          fontSize: 16,
+          fontWeight: 600,
+          color: dark ? "#FFFFFF" : "#000000",
+          paddingRight: onBack ? 44 : 0,
+        }}
+      >
+        {title}
       </div>
+    </div>
+  );
+}
+
+function MessageComposer({
+  text,
+  onTextChange,
+  onSend,
+  isSending,
+  error,
+  placeholder,
+  filePath,
+}: {
+  text: string;
+  onTextChange: (value: string) => void;
+  onSend: () => void;
+  isSending: boolean;
+  error?: string | null;
+  placeholder?: string;
+  filePath?: string;
+}) {
+  const dark = useIsDark();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = "0px";
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
+  }, [text]);
+
+  return (
+    <div
+      style={{
+        position: "sticky",
+        bottom: 0,
+        zIndex: 10,
+        padding: "10px 12px 12px",
+        borderTop: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
+        backgroundColor: dark ? "rgba(28,28,30,0.96)" : "rgba(249,249,251,0.98)",
+        backdropFilter: "blur(18px)",
+      }}
+    >
+      {filePath && (
+        <div
+          style={{
+            marginBottom: 8,
+            padding: "10px 12px",
+            borderRadius: 12,
+            backgroundColor: dark ? "rgba(255,255,255,0.06)" : "#FFFFFF",
+            fontSize: 13,
+            color: dark ? "rgba(255,255,255,0.75)" : "rgba(0,0,0,0.65)",
+          }}
+        >
+          Attachment: {filePath.split("/").pop()}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={(event) => onTextChange(event.target.value)}
+          placeholder={placeholder ?? "iMessage"}
+          rows={1}
+          style={{
+            width: "100%",
+            minHeight: 42,
+            maxHeight: 120,
+            overflowY: "auto",
+            resize: "none",
+            borderRadius: 20,
+            border: `1px solid ${dark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)"}`,
+            backgroundColor: dark ? "rgba(44,44,46,1)" : "#FFFFFF",
+            color: dark ? "#FFFFFF" : "#000000",
+            padding: "10px 14px",
+            fontSize: 15,
+            lineHeight: 1.35,
+            boxSizing: "border-box",
+            outline: "none",
+          }}
+        />
+        <button
+          type="button"
+          onClick={onSend}
+          disabled={isSending}
+          style={{
+            border: "none",
+            borderRadius: 999,
+            backgroundColor: isSending ? (dark ? "rgba(10,132,255,0.55)" : "rgba(0,122,255,0.55)") : BLUE,
+            color: "#FFFFFF",
+            width: 42,
+            height: 42,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            cursor: isSending ? "default" : "pointer",
+            flexShrink: 0,
+          }}
+        >
+          {isSending ? (
+            <span style={{ fontSize: 12, fontWeight: 600 }}>...</span>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+              <path d="M4 20L20 12L4 4L7 12L4 20Z" fill="currentColor" />
+            </svg>
+          )}
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ fontSize: 13, color: "#ff453a", marginTop: 8 }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function resolveConversationTarget(messages: MessageData[]): {
+  recipient?: string;
+  chat_identifier?: string;
+} {
+  const firstIncoming = messages.find((message) => !message.is_from_me);
+  if (firstIncoming && str(firstIncoming.sender) && str(firstIncoming.sender) !== "me") {
+    return { recipient: str(firstIncoming.sender) };
+  }
+
+  const chatIdentifier = str(messages[0]?.chat_identifier);
+  return chatIdentifier ? { chat_identifier: chatIdentifier } : {};
+}
+
+function resolveConversationTitle(messages: MessageData[]): string {
+  const firstIncoming = messages.find((message) => !message.is_from_me);
+  return (
+    str(firstIncoming?.sender_name) ||
+    str(firstIncoming?.sender) ||
+    str(messages[0]?.chat_identifier) ||
+    "Conversation"
+  );
+}
+
+function preferredConversationTitle(
+  explicitTitle: string | undefined,
+  messages: MessageData[],
+): string {
+  const resolved = resolveConversationTitle(messages);
+  if (!explicitTitle) return resolved;
+  if (explicitTitle.startsWith("+") || explicitTitle.includes("@")) {
+    return resolved || explicitTitle;
+  }
+  return explicitTitle;
+}
+
+function ConversationScreen({
+  title,
+  messages,
+  onSendDraft,
+  onBack,
+  recipient,
+  chat_identifier,
+  initialText = "",
+  filePath,
+  optimisticMessage,
+}: {
+  title: string;
+  messages: MessageData[];
+  onSendDraft?: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+    text?: string;
+    file_path?: string;
+  }) => Promise<void>;
+  onBack?: () => void;
+  recipient?: string;
+  chat_identifier?: string;
+  initialText?: string;
+  filePath?: string;
+  optimisticMessage?: MessageData;
+}) {
+  const [text, setText] = useState(initialText);
+  const [isSending, setIsSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const mergedMessages = mergeMessages(messages, optimisticMessage);
+  const target = recipient || chat_identifier;
+  const resolvedTitle = preferredConversationTitle(title, mergedMessages);
+
+  useEffect(() => {
+    setText(initialText);
+  }, [initialText, title]);
+
+  async function handleSend() {
+    const nextText = text.trim();
+    if (!nextText && !filePath) {
+      setSendError("Add a message or attachment before sending.");
+      return;
+    }
+    if (!onSendDraft) {
+      setSendError("Sending is not available in this view.");
+      return;
+    }
+    if (!target) {
+      setSendError("Could not determine where to send this message.");
+      return;
+    }
+
+    setIsSending(true);
+    setSendError(null);
+    try {
+      await onSendDraft({
+        recipient,
+        chat_identifier,
+        text: nextText || undefined,
+        file_path: filePath || undefined,
+      });
+      setText("");
+    } catch (error) {
+      setSendError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSending(false);
+    }
+  }
+
+  return (
+    <div style={{ width: "100%" }}>
+      <ConversationHeader title={resolvedTitle} onBack={onBack} />
+      <ConversationView messages={mergedMessages} />
+      <MessageComposer
+        text={text}
+        onTextChange={setText}
+        onSend={() => void handleSend()}
+        isSending={isSending}
+        error={sendError}
+        filePath={filePath}
+      />
+    </div>
+  );
+}
+
+export function ThreadListView({
+  threads,
+  onSendDraft,
+}: {
+  threads: ThreadData[];
+  onSendDraft?: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+    text?: string;
+    file_path?: string;
+  }) => Promise<void>;
+}) {
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+
+  if (selectedIdx !== null) {
+    const thread = threads[selectedIdx];
+    const messages = arr(thread.recent_messages) as MessageData[];
+    const name = str(thread.display_name) || str(thread.chat_identifier);
+    const participants = arr(thread.participants) as Array<Record<string, unknown>>;
+    const singleHandle = participants.length === 1 ? str(participants[0]?.handle) : "";
+    return (
+      <ConversationScreen
+        title={name}
+        messages={messages}
+        onSendDraft={onSendDraft}
+        onBack={() => setSelectedIdx(null)}
+        recipient={singleHandle || undefined}
+        chat_identifier={singleHandle ? undefined : str(thread.chat_identifier) || undefined}
+      />
     );
   }
 
@@ -765,31 +1147,100 @@ export function ContactMeView({ me }: { me: ContactData }) {
 }
 
 // ---- Auto-render: Send Result View ----
-export function SendResultView({ data }: { data: { success: boolean; message: string; recent_messages?: MessageData[] } }) {
-  const dark = useIsDark();
+export function SendResultView({
+  data,
+  onSendDraft,
+}: {
+  data: {
+    success: boolean;
+    message: string;
+    recent_messages?: MessageData[];
+    recipient?: string;
+    chat_identifier?: string;
+    optimistic_message?: MessageData;
+  };
+  onSendDraft: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+    text?: string;
+    file_path?: string;
+  }) => Promise<void>;
+}) {
+  const messages = arr(data.recent_messages) as MessageData[];
+  const target = resolveConversationTarget(messages);
+  const title = str(data.recipient) || str(data.chat_identifier) || str(messages[0]?.sender_name) || str(messages[0]?.chat_identifier) || "Conversation";
 
   return (
-    <div style={{ width: "100%" }}>
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "10px 16px",
-        backgroundColor: dark ? "rgba(48,209,88,0.12)" : "rgba(52,199,89,0.08)",
-        borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
-      }}>
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="8" r="8" fill={dark ? "#30D158" : "#34C759"} />
-          <path d="M4.5 8L7 10.5L11.5 5.5" stroke="#FFF" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        <span style={{ fontSize: 14, fontWeight: 500, color: dark ? "#30D158" : "#34C759" }}>
-          {str(data.message) || "Message sent"}
-        </span>
-      </div>
-      {arr(data.recent_messages).length > 0 && (
-        <ConversationView messages={arr(data.recent_messages) as MessageData[]} />
-      )}
-    </div>
+    <ConversationScreen
+      title={title}
+      messages={messages}
+      onSendDraft={onSendDraft}
+      recipient={data.recipient || target.recipient}
+      chat_identifier={data.chat_identifier || target.chat_identifier}
+      optimisticMessage={data.optimistic_message}
+    />
+  );
+}
+
+interface DraftData {
+  recipient?: string;
+  chat_identifier?: string;
+  text?: string;
+  file_path?: string;
+  optimistic_message?: MessageData;
+}
+
+export function DraftApprovalView({
+  draft,
+  recentMessages,
+  onSendDraft,
+}: {
+  draft: DraftData;
+  recentMessages: MessageData[];
+  onSendDraft: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+    text?: string;
+    file_path?: string;
+  }) => Promise<void>;
+}) {
+  const title = str(draft.recipient) || str(draft.chat_identifier) || resolveConversationTitle(recentMessages);
+  const filePath = str(draft.file_path);
+
+  return (
+    <ConversationScreen
+      title={title}
+      messages={recentMessages}
+      onSendDraft={onSendDraft}
+      recipient={draft.recipient}
+      chat_identifier={draft.chat_identifier}
+      initialText={str(draft.text)}
+      filePath={filePath || undefined}
+    />
+  );
+}
+
+export function MessagesConversationView({
+  messages,
+  onSendDraft,
+}: {
+  messages: MessageData[];
+  onSendDraft?: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+    text?: string;
+    file_path?: string;
+  }) => Promise<void>;
+}) {
+  const target = resolveConversationTarget(messages);
+  return (
+    <ConversationScreen
+      title={resolveConversationTitle(messages)}
+      messages={messages}
+      onSendDraft={onSendDraft}
+      recipient={target.recipient}
+      chat_identifier={target.chat_identifier}
+    />
   );
 }
 
@@ -798,10 +1249,17 @@ export function SearchResultsView({
   messages,
   conversations,
   query,
+  onSendDraft,
 }: {
   messages: MessageData[];
   conversations?: ThreadData[];
   query: string;
+  onSendDraft?: (args: {
+    recipient?: string;
+    chat_identifier?: string;
+    text?: string;
+    file_path?: string;
+  }) => Promise<void>;
 }) {
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const dark = useIsDark();
@@ -812,29 +1270,17 @@ export function SearchResultsView({
     const thread = convos[selectedIdx];
     const msgs = arr(thread.recent_messages) as MessageData[];
     const name = str(thread.display_name) || str(thread.chat_identifier);
+    const participants = arr(thread.participants) as Array<Record<string, unknown>>;
+    const singleHandle = participants.length === 1 ? str(participants[0]?.handle) : "";
     return (
-      <div style={{ width: "100%" }}>
-        <div
-          onClick={() => setSelectedIdx(null)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "12px 16px",
-            cursor: "pointer",
-            borderBottom: `0.5px solid ${dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)"}`,
-            color: BLUE,
-            fontSize: 16,
-            fontWeight: 500,
-          }}
-        >
-          <svg width="8" height="14" viewBox="0 0 8 14" fill="none">
-            <path d="M7 1L1.5 7L7 13" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          <span>{name}</span>
-        </div>
-        <ConversationView messages={msgs} />
-      </div>
+      <ConversationScreen
+        title={name}
+        messages={msgs}
+        onSendDraft={onSendDraft}
+        onBack={() => setSelectedIdx(null)}
+        recipient={singleHandle || undefined}
+        chat_identifier={singleHandle ? undefined : str(thread.chat_identifier) || undefined}
+      />
     );
   }
 

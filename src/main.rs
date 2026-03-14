@@ -153,7 +153,7 @@ fn make_send_tool_route() -> ToolRoute<IMessageServer> {
     let schema = make_schema(json!({
         "recipient": {
             "type": "string",
-            "description": "Recipient phone number (E.164) or Apple ID email. For group chats, leave empty and use chat_identifier."
+            "description": "Recipient phone number in E.164 format like +14155550123. Do not pass a name here. Use contacts_search first to resolve the number. For group chats, leave empty and use chat_identifier."
         },
         "chat_identifier": {
             "type": "string",
@@ -171,7 +171,7 @@ fn make_send_tool_route() -> ToolRoute<IMessageServer> {
 
     let mut tool_def = Tool::new(
         "messages_send",
-        Cow::Borrowed("Send an iMessage or SMS. Provide recipient as phone (E.164) or email. Use contacts_search to find their number if needed. For group chats: use chat_identifier from messages_threads. Can send text, files/images, or both. Messages.app must be running. This tool is only exposed when MCP_IMESSAGE_ENABLE_SEND=1."),
+        Cow::Borrowed("Send an iMessage or SMS. Provide recipient only as a phone number in E.164 format. Never pass a contact name directly. Use contacts_search first to find their number. For group chats: use chat_identifier from messages_threads. Can send text, files/images, or both. Messages.app must be running. This tool is only exposed when MCP_IMESSAGE_ENABLE_SEND=1."),
         schema,
     );
     tool_def.meta = Some(make_ui_meta());
@@ -193,11 +193,24 @@ fn make_send_tool_route() -> ToolRoute<IMessageServer> {
                 .and_then(|v| v.as_str())
                 .map(String::from);
 
-            let send_result = send::send_message(
+            let normalized_file_path = match send::validate_message_request(
                 recipient.as_deref(),
                 chat_identifier.as_deref(),
                 text.as_deref(),
                 file_path.as_deref(),
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    let result = format!("{{\"error\": \"{}\"}}", error);
+                    return Ok(CallToolResult::success(vec![Content::text(result)]));
+                }
+            };
+
+            let send_result = send::send_message(
+                recipient.as_deref(),
+                chat_identifier.as_deref(),
+                text.as_deref(),
+                normalized_file_path.as_deref(),
             );
 
             let result = match send_result {
@@ -212,13 +225,117 @@ fn make_send_tool_route() -> ToolRoute<IMessageServer> {
                     };
                     if let Some(msgs) = recent {
                         if let Some(obj) = v.as_object_mut() {
+                            let optimistic = send::optimistic_message(
+                                recipient.as_deref(),
+                                chat_identifier.as_deref(),
+                                text.as_deref(),
+                                normalized_file_path.as_deref(),
+                                "sent",
+                            );
                             obj.insert("recent_messages".to_string(), msgs["messages"].clone());
+                            obj.insert("optimistic_message".to_string(), optimistic);
                         }
                     }
                     v.to_string()
                 }
                 Err(e) => format!("{{\"error\": \"{}\"}}", e),
             };
+            Ok(CallToolResult::success(vec![Content::text(result)]))
+        })
+    })
+}
+
+fn make_draft_tool_route() -> ToolRoute<IMessageServer> {
+    let schema = make_schema(json!({
+        "recipient": {
+            "type": "string",
+            "description": "Recipient phone number in E.164 format like +14155550123. Do not pass a name here. Use contacts_search first to resolve the number. For group chats, leave empty and use chat_identifier."
+        },
+        "chat_identifier": {
+            "type": "string",
+            "description": "Chat identifier for group chats (from messages_threads). Use this OR recipient, not both."
+        },
+        "text": {
+            "type": "string",
+            "description": "Draft message text. Optional if drafting a file-only send."
+        },
+        "file_path": {
+            "type": "string",
+            "description": "Absolute path to a file or image to include with the draft."
+        }
+    }));
+
+    let mut tool_def = Tool::new(
+        "messages_draft",
+        Cow::Borrowed("Create a draft iMessage preview without sending it. Provide recipient only as a phone number in E.164 format, never a name. Use contacts_search first to find the number. Returns recent messages plus a draft view with a send button in the UI."),
+        schema,
+    );
+    tool_def.meta = Some(make_ui_meta());
+
+    ToolRoute::new_dyn(tool_def, |context| {
+        Box::pin(async move {
+            let args = context.arguments.unwrap_or_default();
+            let recipient = args
+                .get("recipient")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let chat_identifier = args
+                .get("chat_identifier")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let text = args.get("text").and_then(|v| v.as_str()).map(String::from);
+            let file_path = args
+                .get("file_path")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+
+            let normalized_file_path = match send::validate_message_request(
+                recipient.as_deref(),
+                chat_identifier.as_deref(),
+                text.as_deref(),
+                file_path.as_deref(),
+            ) {
+                Ok(path) => path,
+                Err(error) => {
+                    let result = format!("{{\"error\": \"{}\"}}", error);
+                    return Ok(CallToolResult::success(vec![Content::text(result)]));
+                }
+            };
+
+            let recent_messages = if let Some(ref recip) = recipient {
+                messages::fetch(vec![recip.clone()], None, None, Some(8), None, None)
+                    .ok()
+                    .and_then(|value| value["messages"].as_array().cloned())
+                    .unwrap_or_default()
+            } else if let Some(ref cid) = chat_identifier {
+                messages::fetch(vec![], Some(cid.clone()), None, Some(8), None, None)
+                    .ok()
+                    .and_then(|value| value["messages"].as_array().cloned())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            let optimistic = send::optimistic_message(
+                recipient.as_deref(),
+                chat_identifier.as_deref(),
+                text.as_deref(),
+                normalized_file_path.as_deref(),
+                "draft",
+            );
+
+            let result = json!({
+                "draft": {
+                    "recipient": recipient,
+                    "chat_identifier": chat_identifier,
+                    "text": text,
+                    "file_path": normalized_file_path,
+                    "optimistic_message": optimistic
+                },
+                "recent_messages": recent_messages
+            })
+            .to_string();
+
             Ok(CallToolResult::success(vec![Content::text(result)]))
         })
     })
@@ -335,6 +452,7 @@ impl IMessageServer {
         let mut router = Self::tool_router();
         router.add_route(make_threads_tool_route());
         router.add_route(make_fetch_tool_route());
+        router.add_route(make_draft_tool_route());
         if send::sending_enabled() {
             router.add_route(make_send_tool_route());
         }
@@ -377,8 +495,9 @@ impl ServerHandler for IMessageServer {
              'show my conversation with [name]' -> messages_fetch(name). \
              'search for [term]' -> messages_search (finds matching conversations AND messages). \
              'show recent chats' -> messages_threads. \
+             'draft a text to [name]' -> contacts_search first, then messages_draft with the resolved phone number. \
              'find [name]'s phone/email' -> contacts_search. \
-             'text [name]' -> contacts_search to get number, then messages_send. \
+             'text [name]' -> contacts_search to get number, then messages_send with the phone number. \
              Note: messages_send is disabled unless MCP_IMESSAGE_ENABLE_SEND=1 is set."
                 .to_string(),
         )
