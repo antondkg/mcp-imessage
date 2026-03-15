@@ -29,7 +29,29 @@ brew tap antondkg/homebrew-tap
 brew install mcp-imessage
 ```
 
-Then point your MCP client at:
+Then add this to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "imessage": {
+      "command": "/opt/homebrew/opt/mcp-imessage/bin/mcp-imessage",
+      "env": {
+        "MCP_IMESSAGE_ENABLE_SEND": "1"
+      }
+    }
+  }
+}
+```
+
+Config file examples:
+
+- Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Codex / local agent config: `~/.agents/mcp.json`
+
+If you do not want send support yet, remove the `env` block and keep only the `command`.
+
+Binary path:
 
 ```text
 /opt/homebrew/opt/mcp-imessage/bin/mcp-imessage
@@ -45,7 +67,39 @@ cargo build --release
 
 The Rust build automatically installs UI dependencies with `npm ci` the first time and bundles the frontend into `ui/dist/index.html`.
 
-Then point your MCP client at the compiled binary:
+Then add one of these MCP config entries.
+
+Example for Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "imessage": {
+      "command": "/absolute/path/to/mcp-imessage",
+      "env": {
+        "MCP_IMESSAGE_ENABLE_SEND": "1"
+      }
+    }
+  }
+}
+```
+
+Example for a local agent config like `~/.agents/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "imessage": {
+      "command": "/absolute/path/to/mcp-imessage",
+      "env": {
+        "MCP_IMESSAGE_ENABLE_SEND": "1"
+      }
+    }
+  }
+}
+```
+
+Compiled binary path:
 
 ```text
 /absolute/path/to/mcp-imessage/target/release/mcp-imessage
@@ -107,7 +161,7 @@ macOS protects `~/Library/Messages/chat.db`, so the `mcp-imessage` server proces
 
 Example:
 
-![Full Disk Access setup for mcp-imessage](assets/screenshots/full-disk-access.png)
+![Full Disk Access setup for mcp-imessage](assets/screenshots/full-disk-access-2026-03-14.png)
 
 Examples:
 
@@ -139,54 +193,6 @@ This is the important part:
 - do not rely on `.zshrc` or `.bashrc` unless you are launching `mcp-imessage` manually from a shell
 
 If the env var is missing, the server will still read and search messages, but the `messages_send` tool will not exist.
-
-Example for a Homebrew install in Claude Desktop:
-
-File:
-`~/Library/Application Support/Claude/claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "imessage": {
-      "command": "/opt/homebrew/opt/mcp-imessage/bin/mcp-imessage",
-      "env": {
-        "MCP_IMESSAGE_ENABLE_SEND": "1"
-      }
-    }
-  }
-}
-```
-
-Example for Claude Desktop:
-
-```json
-{
-  "mcpServers": {
-    "imessage": {
-      "command": "/absolute/path/to/mcp-imessage",
-      "env": {
-        "MCP_IMESSAGE_ENABLE_SEND": "1"
-      }
-    }
-  }
-}
-```
-
-Example for a local agent config like `~/.agents/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "imessage": {
-      "command": "/absolute/path/to/mcp-imessage",
-      "env": {
-        "MCP_IMESSAGE_ENABLE_SEND": "1"
-      }
-    }
-  }
-}
-```
 
 If you run `mcp-imessage` directly in a terminal instead of through an MCP client, then you can launch it like this:
 
