@@ -1,6 +1,6 @@
 [package]
 name = "mcp-imessage"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "A macOS MCP server for reading contacts, browsing iMessage threads, searching messages, and sending messages with a native-style embedded UI."
 license = "MIT"
