@@ -1,6 +1,6 @@
 <div align="center">
   <h1>mcp-imessage</h1>
-  <p>A macOS MCP server for reading iMessage data, searching conversations, looking up contacts, and rendering everything in a native-style embedded UI.</p>
+  <p>A macOS MCP server for reading, searching, drafting, and sending iMessages with a native-style embedded UI.</p>
   <p>
     <img alt="macOS" src="https://img.shields.io/badge/macOS-Only-111827?style=flat-square&logo=apple&logoColor=white">
     <img alt="Rust" src="https://img.shields.io/badge/Built%20with-Rust-b7410e?style=flat-square&logo=rust&logoColor=white">
@@ -12,24 +12,25 @@
 `mcp-imessage` can:
 
 - read recent iMessage threads
-- fetch messages from a person or group chat
+- fetch full conversations by name, number, or group chat
 - search messages and conversations
 - look up contacts from Contacts.app
+- draft messages in the UI before sending
 - send iMessages, SMS messages, and file attachments
-- render results in a native-style embedded UI
+- render threads in a native-style embedded UI with a live-updating composer
 
 It is built in Rust for the server layer, with a small React/Vite app bundled into the binary for the UI.
 
 ## Quick start
 
-### Option 1: Homebrew
+### Install with Homebrew
 
 ```bash
 brew tap antondkg/homebrew-tap
 brew install mcp-imessage
 ```
 
-Then add this to your MCP config:
+Then add this to your MCP client config:
 
 ```json
 {
@@ -44,20 +45,20 @@ Then add this to your MCP config:
 }
 ```
 
-Config file examples:
+Common MCP config files:
 
 - Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - Codex / local agent config: `~/.agents/mcp.json`
+- Generic MCP clients: whatever config file your client uses for `mcpServers`
+
+Homebrew binary paths:
+
+- Apple Silicon: `/opt/homebrew/opt/mcp-imessage/bin/mcp-imessage`
+- Intel Macs: `/usr/local/opt/mcp-imessage/bin/mcp-imessage`
 
 If you do not want send support yet, remove the `env` block and keep only the `command`.
 
-Binary path:
-
-```text
-/opt/homebrew/opt/mcp-imessage/bin/mcp-imessage
-```
-
-### Option 2: Build from source
+### Build from source
 
 ```bash
 git clone https://github.com/antondkg/mcp-imessage.git
@@ -65,81 +66,19 @@ cd mcp-imessage
 cargo build --release
 ```
 
-The Rust build automatically installs UI dependencies with `npm ci` the first time and bundles the frontend into `ui/dist/index.html`.
+The Rust build installs UI dependencies with `npm ci` and bundles the frontend into `ui/dist/index.html`.
 
-Then add one of these MCP config entries.
-
-Example for Claude Desktop:
-
-```json
-{
-  "mcpServers": {
-    "imessage": {
-      "command": "/absolute/path/to/mcp-imessage",
-      "env": {
-        "MCP_IMESSAGE_ENABLE_SEND": "1"
-      }
-    }
-  }
-}
-```
-
-Example for a local agent config like `~/.agents/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "imessage": {
-      "command": "/absolute/path/to/mcp-imessage",
-      "env": {
-        "MCP_IMESSAGE_ENABLE_SEND": "1"
-      }
-    }
-  }
-}
-```
-
-Compiled binary path:
+Then point your MCP client at:
 
 ```text
 /absolute/path/to/mcp-imessage/target/release/mcp-imessage
 ```
 
-Common config locations:
-
-- Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Codex / local agent config: `~/.agents/mcp.json`
-- Generic MCP clients: whatever config file your client uses for `mcpServers`
-
 ## Screenshots
 
-### Thread list
-
-![Thread list UI](assets/screenshots/threads.png)
-
-### Conversation view
-
-![Conversation view UI](assets/screenshots/conversation.png)
-
-### Search and contact views
-
-![Search and contact UI](assets/screenshots/search.png)
-
-## Why this repo exists
-
-Most iMessage MCP experiments stop at raw JSON. This one is meant to be usable:
-
-- fast read-only SQLite queries for message history
-- Contacts lookup with caching and AppleScript fallback
-- send support for direct chats and group chats
-- an embedded UI resource that makes conversations easier to inspect inside MCP hosts
-
-## What it uses
-
-- `chat.db` at `~/Library/Messages/chat.db`
-- Contacts data from macOS Contacts
-- AppleScript via `osascript` for send actions and Contacts fallback
-- MCP over stdio
+![Thread list UI](assets/screenshots/threads-2026-03-14.png)
+![Conversation view UI](assets/screenshots/conversation-2026-03-14.png)
+![Search and contact UI](assets/screenshots/search-2026-03-14.png)
 
 ## Requirements
 
@@ -156,43 +95,16 @@ macOS protects `~/Library/Messages/chat.db`, so the `mcp-imessage` server proces
 1. Open `System Settings`.
 2. Go to `Privacy & Security` -> `Full Disk Access`.
 3. Add and enable `mcp-imessage`.
-4. This is the important part: grant access to the actual `mcp-imessage` binary, not just your MCP client.
-5. If your MCP client launches `mcp-imessage` in a way that still inherits the host app's privacy boundary, also grant Full Disk Access to that host app.
-
-Example:
+4. Grant access to the actual `mcp-imessage` binary, not just the host app.
+5. If your MCP host still inherits the host app's privacy boundary, also grant Full Disk Access to that host app.
 
 ![Full Disk Access setup for mcp-imessage](assets/screenshots/full-disk-access-2026-03-14.png)
 
-Examples:
-
-- If you run the binary directly, add the compiled `mcp-imessage` binary.
-- If Claude Desktop, Codex, Terminal, iTerm, or another MCP host launches that binary for you, still make sure the `mcp-imessage` binary itself has access first.
-- In some setups you may also need to add the host app, but that does not replace granting access to `mcp-imessage`.
-
 After enabling Full Disk Access, fully restart the host app before testing again.
 
-## Security notes
+## Sending
 
-- Message database access is opened in read-only SQLite mode.
-- Contacts database access is also opened in read-only SQLite mode.
-- `messages_send` is disabled by default and is only exposed when `MCP_IMESSAGE_ENABLE_SEND=1` is set.
-- AppleScript send and search actions pass user input through argv instead of interpolating raw values into script source.
-- The UI build runs local `npm ci` during Cargo builds, so treat dependency updates as part of your trusted supply chain review.
-
-## Enable sending
-
-`messages_send` is off by default.
-
-Set `MCP_IMESSAGE_ENABLE_SEND=1` inside your MCP client's config for the `mcp-imessage` server entry.
-
-This is the important part:
-
-- if you use Claude Desktop, put it in `claude_desktop_config.json`
-- if you use Codex or another local agent setup, put it in that client's MCP config file
-- do not put it in the chat prompt
-- do not rely on `.zshrc` or `.bashrc` unless you are launching `mcp-imessage` manually from a shell
-
-If the env var is missing, the server will still read and search messages, but the `messages_send` tool will not exist.
+`messages_send` is off by default. Set `MCP_IMESSAGE_ENABLE_SEND=1` in the MCP config for the `mcp-imessage` server entry to enable it.
 
 If you run `mcp-imessage` directly in a terminal instead of through an MCP client, then you can launch it like this:
 
@@ -200,9 +112,13 @@ If you run `mcp-imessage` directly in a terminal instead of through an MCP clien
 MCP_IMESSAGE_ENABLE_SEND=1 /absolute/path/to/mcp-imessage
 ```
 
+- Do not put contact names into `messages_send` or `messages_draft`.
+- Use `contacts_search` first, then pass the phone number in E.164 format like `+14155550123`.
+- Group chats should use `chat_identifier` from `messages_threads`.
+
 ## For Agents
 
-If you are an AI agent or helping a user install this for an MCP client, use this checklist:
+If you are helping a user install this in an MCP client:
 
 1. Build or install `mcp-imessage`.
 2. Add the `mcp-imessage` binary to the client's MCP config.
@@ -246,48 +162,27 @@ File:
 }
 ```
 
-Generic MCP client guidance:
-
-- use the compiled `mcp-imessage` binary as the server command
-- configure it as a local stdio MCP server
-- set `MCP_IMESSAGE_ENABLE_SEND=1` only if the user wants sending enabled
-- do not pass contact names to `messages_send` or `messages_draft`
-- use `contacts_search` first, then pass the resolved phone number in E.164 format
-
 ## Tools
 
 ### `messages_threads`
 
-Lists recent conversation threads. For small result sets it also includes recent messages so hosts can render a preview immediately.
+Lists recent conversation threads. For small result sets it also includes recent messages for inline previews.
 
 ### `messages_fetch`
 
-Fetches a conversation by:
-
-- contact name
-- participant phone number or email
-- group chat identifier
-
-Supports pagination with `before_timestamp` and `after_timestamp`.
+Fetches a conversation by contact name, participant number or email, or group chat identifier. Supports pagination with `before_timestamp` and `after_timestamp`.
 
 ### `messages_search`
 
-Searches both:
-
-- matching contact conversations
-- matching message text
-
-This makes it useful for both "show me Alex" and "find the message about invoices".
+Searches both matching conversations and matching message text.
 
 ### `messages_send`
 
-Sends:
+Sends text, file attachments, or both. Works with direct recipients and group chats.
 
-- text
-- file attachments
-- text plus file attachments
+### `messages_draft`
 
-Works with direct recipients and group chats.
+Builds a draft composer UI without sending. The UI shows recent messages, keeps the draft editable, and lets the user approve the send inside the conversation view.
 
 ### `contacts_search`
 
@@ -299,15 +194,13 @@ Returns the local user's contact card from Contacts.app.
 
 ## Development
 
-### Run the UI by itself
-
 ```bash
 cd ui
 npm ci
 npm run dev
 ```
 
-### Build everything
+Build everything:
 
 ```bash
 cd ui
@@ -326,30 +219,13 @@ If you already built `ui/dist/index.html` and want Cargo to skip rebuilding it:
 MCP_IMESSAGE_SKIP_UI_BUILD=1 cargo build
 ```
 
-## Privacy and safety notes
+## Security and privacy
 
 - This project reads local macOS message data directly from the Messages SQLite database.
-- It is intended for local use on your own machine.
+- Message and Contacts database access are opened in read-only mode.
 - Nothing in this repo sends your message history to a remote service by default.
 - Sending messages requires AppleScript automation access to Messages.app.
-
-## Repo layout
-
-```text
-.
-├── build.rs
-├── src/
-└── ui/
-```
-
-## Publish checklist
-
-Before pushing this repo public:
-
-1. Make sure your local MCP config points at your local binary path, not a private workspace path you do not want to expose.
-2. Review git history if this repo started private and might contain earlier secrets or personal data.
-3. Confirm the macOS permission prompts and setup instructions make sense on a clean machine.
-4. Push to a public GitHub repo, then enable the included macOS CI workflow.
+- AppleScript send and search actions pass user input through argv instead of string interpolation.
 
 ## License
 
