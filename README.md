@@ -20,6 +20,43 @@
 
 It is built in Rust for the server layer, with a small React/Vite app bundled into the binary for the UI.
 
+## Quick start
+
+### Option 1: Homebrew
+
+```bash
+brew tap antondkg/homebrew-tap
+brew install mcp-imessage
+```
+
+Then point your MCP client at:
+
+```text
+/opt/homebrew/opt/mcp-imessage/bin/mcp-imessage
+```
+
+### Option 2: Build from source
+
+```bash
+git clone https://github.com/antondkg/mcp-imessage.git
+cd mcp-imessage
+cargo build --release
+```
+
+The Rust build automatically installs UI dependencies with `npm ci` the first time and bundles the frontend into `ui/dist/index.html`.
+
+Then point your MCP client at the compiled binary:
+
+```text
+/absolute/path/to/mcp-imessage/target/release/mcp-imessage
+```
+
+Common config locations:
+
+- Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Codex / local agent config: `~/.agents/mcp.json`
+- Generic MCP clients: whatever config file your client uses for `mcpServers`
+
 ## Screenshots
 
 ### Thread list
@@ -88,35 +125,128 @@ After enabling Full Disk Access, fully restart the host app before testing again
 - AppleScript send and search actions pass user input through argv instead of interpolating raw values into script source.
 - The UI build runs local `npm ci` during Cargo builds, so treat dependency updates as part of your trusted supply chain review.
 
-## Quick start
+## Enable sending
 
-```bash
-git clone https://github.com/antondkg/mcp-imessage.git
-cd mcp-imessage
-cargo build --release
-```
+`messages_send` is off by default.
 
-The Rust build automatically installs UI dependencies with `npm ci` the first time and bundles the frontend into `ui/dist/index.html`.
+Set `MCP_IMESSAGE_ENABLE_SEND=1` inside your MCP client's config for the `mcp-imessage` server entry.
 
-Then point your MCP client at the compiled binary:
+This is the important part:
+
+- if you use Claude Desktop, put it in `claude_desktop_config.json`
+- if you use Codex or another local agent setup, put it in that client's MCP config file
+- do not put it in the chat prompt
+- do not rely on `.zshrc` or `.bashrc` unless you are launching `mcp-imessage` manually from a shell
+
+If the env var is missing, the server will still read and search messages, but the `messages_send` tool will not exist.
+
+Example for a Homebrew install in Claude Desktop:
+
+File:
+`~/Library/Application Support/Claude/claude_desktop_config.json`
 
 ```json
 {
   "mcpServers": {
     "imessage": {
-      "command": "/absolute/path/to/mcp-imessage/target/release/mcp-imessage"
+      "command": "/opt/homebrew/opt/mcp-imessage/bin/mcp-imessage",
+      "env": {
+        "MCP_IMESSAGE_ENABLE_SEND": "1"
+      }
     }
   }
 }
 ```
 
-Common config locations:
+Example for Claude Desktop:
 
-- Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Codex / local agent config: `~/.agents/mcp.json`
-- Generic MCP clients: whatever config file your client uses for `mcpServers`
+```json
+{
+  "mcpServers": {
+    "imessage": {
+      "command": "/absolute/path/to/mcp-imessage",
+      "env": {
+        "MCP_IMESSAGE_ENABLE_SEND": "1"
+      }
+    }
+  }
+}
+```
 
-To enable sending support, set `MCP_IMESSAGE_ENABLE_SEND=1` in the environment for your MCP host before launching the server.
+Example for a local agent config like `~/.agents/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "imessage": {
+      "command": "/absolute/path/to/mcp-imessage",
+      "env": {
+        "MCP_IMESSAGE_ENABLE_SEND": "1"
+      }
+    }
+  }
+}
+```
+
+If you run `mcp-imessage` directly in a terminal instead of through an MCP client, then you can launch it like this:
+
+```bash
+MCP_IMESSAGE_ENABLE_SEND=1 /absolute/path/to/mcp-imessage
+```
+
+## For Agents
+
+If you are an AI agent or helping a user install this for an MCP client, use this checklist:
+
+1. Build or install `mcp-imessage`.
+2. Add the `mcp-imessage` binary to the client's MCP config.
+3. If the user wants send support, add an `env` block with `MCP_IMESSAGE_ENABLE_SEND=1` on the `mcp-imessage` server entry.
+4. Make sure Full Disk Access is granted to the `mcp-imessage` binary itself.
+5. Restart the MCP host after changing config or permissions.
+
+Claude Desktop example:
+
+File:
+`~/Library/Application Support/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "imessage": {
+      "command": "/absolute/path/to/mcp-imessage",
+      "env": {
+        "MCP_IMESSAGE_ENABLE_SEND": "1"
+      }
+    }
+  }
+}
+```
+
+Codex / local agent example:
+
+File:
+`~/.agents/mcp.json`
+
+```json
+{
+  "mcpServers": {
+    "imessage": {
+      "command": "/absolute/path/to/mcp-imessage",
+      "env": {
+        "MCP_IMESSAGE_ENABLE_SEND": "1"
+      }
+    }
+  }
+}
+```
+
+Generic MCP client guidance:
+
+- use the compiled `mcp-imessage` binary as the server command
+- configure it as a local stdio MCP server
+- set `MCP_IMESSAGE_ENABLE_SEND=1` only if the user wants sending enabled
+- do not pass contact names to `messages_send` or `messages_draft`
+- use `contacts_search` first, then pass the resolved phone number in E.164 format
 
 ## Tools
 
