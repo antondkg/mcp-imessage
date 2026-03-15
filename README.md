@@ -60,17 +60,23 @@ Most iMessage MCP experiments stop at raw JSON. This one is meant to be usable:
 
 ## Full Disk Access
 
-macOS protects `~/Library/Messages/chat.db`, so `mcp-imessage` usually needs Full Disk Access to read message history reliably.
+macOS protects `~/Library/Messages/chat.db`, so the `mcp-imessage` server process itself needs Full Disk Access to read message history reliably.
 
 1. Open `System Settings`.
 2. Go to `Privacy & Security` -> `Full Disk Access`.
 3. Add and enable `mcp-imessage`.
-4. If you launch the server through another app, also grant Full Disk Access to that host app.
+4. This is the important part: grant access to the actual `mcp-imessage` binary, not just your MCP client.
+5. If your MCP client launches `mcp-imessage` in a way that still inherits the host app's privacy boundary, also grant Full Disk Access to that host app.
+
+Example:
+
+![Full Disk Access setup for mcp-imessage](assets/screenshots/full-disk-access.png)
 
 Examples:
 
 - If you run the binary directly, add the compiled `mcp-imessage` binary.
-- If you run it from Terminal, iTerm, Claude, Codex, or another MCP host, add that app too.
+- If Claude Desktop, Codex, Terminal, iTerm, or another MCP host launches that binary for you, still make sure the `mcp-imessage` binary itself has access first.
+- In some setups you may also need to add the host app, but that does not replace granting access to `mcp-imessage`.
 
 After enabling Full Disk Access, fully restart the host app before testing again.
 
@@ -103,6 +109,12 @@ Then point your MCP client at the compiled binary:
   }
 }
 ```
+
+Common config locations:
+
+- Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Codex / local agent config: `~/.agents/mcp.json`
+- Generic MCP clients: whatever config file your client uses for `mcpServers`
 
 To enable sending support, set `MCP_IMESSAGE_ENABLE_SEND=1` in the environment for your MCP host before launching the server.
 
