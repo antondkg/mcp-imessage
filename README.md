@@ -1,4 +1,5 @@
 <div align="center">
+  <img src="assets/imessage-icon.svg" alt="mcp-imessage icon" width="96" height="96">
   <h1>mcp-imessage</h1>
   <p>A macOS MCP server for reading, searching, drafting, and sending iMessages with a native-style embedded UI.</p>
   <p>
