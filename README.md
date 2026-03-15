@@ -21,6 +21,8 @@
 
 It is built in Rust for the server layer, with a small React/Vite app bundled into the binary for the UI.
 
+UI stack: [shadcn/ui](https://github.com/shadcn-ui/ui) and [json-render](https://github.com/ImVexed/json-render).
+
 ## Quick start
 
 ### Install with Homebrew
