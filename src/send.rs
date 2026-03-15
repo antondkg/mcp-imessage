@@ -147,7 +147,10 @@ fn validate_recipient_phone(recipient: &str) -> Result<()> {
         .unwrap_or(recipient)
         .chars()
         .all(|value| value.is_ascii_digit());
-    let digit_count = recipient.chars().filter(|value| value.is_ascii_digit()).count();
+    let digit_count = recipient
+        .chars()
+        .filter(|value| value.is_ascii_digit())
+        .count();
 
     if recipient.starts_with('+') && digits_only && (7..=15).contains(&digit_count) {
         Ok(())
